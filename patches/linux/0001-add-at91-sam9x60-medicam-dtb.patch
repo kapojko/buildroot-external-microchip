@@ -1,0 +1,11 @@
+diff -Naur linux-linux4microchip-2025.04.orig/scripts/dtc/include-prefixes/arm/microchip/Makefile linux-linux4microchip-2025.04/scripts/dtc/include-prefixes/arm/microchip/Makefile
+--- linux-linux4microchip-2025.04.orig/scripts/dtc/include-prefixes/arm/microchip/Makefile	2025-07-05 18:45:21.601819928 +0300
++++ linux-linux4microchip-2025.04/scripts/dtc/include-prefixes/arm/microchip/Makefile	2025-07-05 18:49:48.287109010 +0300
+@@ -64,6 +64,7 @@
+ 	at91sam9x35ek.dtb
+ dtb-$(CONFIG_SOC_SAM9X60) += \
+ 	at91-sam9x60_curiosity.dtb \
++	../at91-sam9x60_medicam.dtb \
+ 	at91-sam9x60ek.dtb
+ dtb-$(CONFIG_SOC_SAM9X7) += \
+ 	at91-sam9x75_curiosity.dtb \
