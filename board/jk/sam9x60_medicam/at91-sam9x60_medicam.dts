@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
- * at91-sam9x60_curiosity.dts - Device Tree file for Microchip SAM9X60 Curiosity board
+ * at91-sam9x60_medicam.dts - Device Tree file for SAM9X60 MediCam board
+ * Based on at91-sam9x60_curiosity.dts - Device Tree file for Microchip SAM9X60 Curiosity board
  *
- * Copyright (C) 2022 Microchip Technology Inc. and its subsidiaries
- *
- * Author: Durai Manickam KR <durai.manickamkr@microchip.com>
+ * Author: Yuriy Kapoyko <yury.kapoyko@gmail.com>
  */
 /dts-v1/;
 #include "microchip/sam9x60.dtsi"
@@ -16,8 +15,9 @@
 
 	aliases {
 		i2c0 = &i2c0;
-		i2c1 = &i2c6;
-		serial2 = &uart7;
+		spi1 = &spi1;
+		serial2 = &uart2;
+		serial5 = &uart5;
 	};
 
 	chosen {
@@ -43,9 +43,9 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_key_gpio_default>;
 
-		button-user {
-			label = "PB_USER";
-			gpios = <&pioA 29 GPIO_ACTIVE_LOW>;
+		button-mode {
+			label = "PB_MODE";
+			gpios = <&pioA 30 GPIO_ACTIVE_HIGH>;
 			linux,code = <KEY_PROG1>;
 			wakeup-source;
 		};
@@ -56,23 +56,14 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_gpio_leds>;
 
-		led-red {
-			label = "red";
-			gpios = <&pioD 17 GPIO_ACTIVE_HIGH>;
-		};
-
-		led-green {
-			label = "green";
-			gpios = <&pioD 19 GPIO_ACTIVE_HIGH>;
-		};
-
-		led-blue {
-			label = "blue";
-			gpios = <&pioD 21 GPIO_ACTIVE_HIGH>;
+		led-info {
+			label = "INFO";
+			gpios = <&pioA 31 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "heartbeat";
 		};
 	};
-
+	
+	// NOTE: other GPIO are expected to be used with gpiod (CONFIG_GPIO_CDEV=y, CONFIG_GPIO_CDEV_V1=y)
 
 	vdd_1v8: regulator-0 {
 		compatible = "regulator-fixed";
@@ -104,18 +95,6 @@
 	vref-supply = <&vdd1_3v3>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_adc_default &pinctrl_adtrg_default>;
-	status = "okay";
-};
-
-&can0 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_can0_rx_tx>;
-	status = "disabled"; /* Conflict with dbgu. */
-};
-
-&can1 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_can1_rx_tx>;
 	status = "okay";
 };
 
@@ -211,28 +190,35 @@
 	};
 };
 
-&flx6 {
-	atmel,flexcom-mode = <ATMEL_FLEXCOM_MODE_TWI>;
+&flx1 {
+	atmel,flexcom-mode = <ATMEL_FLEXCOM_MODE_SPI>;
 	status = "okay";
 
-	i2c6: i2c@600 {
-		dmas = <0>, <0>;
+	spi1: spi@400 {
 		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_flx6_default>;
-		i2c-analog-filter;
-		i2c-digital-filter;
-		i2c-digital-filter-width-ns = <35>;
-		status = "disabled";
+		pinctrl-0 = <&pinctrl_flx1_default>;
+		status = "okay";
 	};
 };
 
-&flx7 {
+&flx2 {
 	atmel,flexcom-mode = <ATMEL_FLEXCOM_MODE_USART>;
 	status = "okay";
 
-	uart7: serial@200 {
+	uart2: serial@200 {
 		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_flx7_default>;
+		pinctrl-0 = <&pinctrl_flx2_default>;
+		status = "okay";
+	};
+};
+
+&flx5 {
+	atmel,flexcom-mode = <ATMEL_FLEXCOM_MODE_USART>;
+	status = "okay";
+
+	uart5: serial@200 {
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_flx5_default>;
 		status = "okay";
 	};
 };
@@ -260,24 +246,6 @@
 
 		pinctrl_adtrg_default: adtrg-default {
 			atmel,pins = <AT91_PIOB 18 AT91_PERIPH_B AT91_PINCTRL_PULL_UP>;
-		};
-	};
-
-	can0 {
-		pinctrl_can0_rx_tx: can0-rx-tx {
-			atmel,pins =
-				<AT91_PIOA 9 AT91_PERIPH_B AT91_PINCTRL_NONE	/* CANRX0 */
-				 AT91_PIOA 10 AT91_PERIPH_B AT91_PINCTRL_NONE	/* CANTX0 */
-				 AT91_PIOC 9 AT91_PERIPH_GPIO AT91_PINCTRL_PULL_DOWN>;	/* Enable CAN Transceivers */
-		};
-	};
-
-	can1 {
-		pinctrl_can1_rx_tx: can1-rx-tx {
-			atmel,pins =
-				<AT91_PIOA 6 AT91_PERIPH_B AT91_PINCTRL_NONE	/* CANRX1 */
-				 AT91_PIOA 5 AT91_PERIPH_B AT91_PINCTRL_NONE	/* CANTX1 */
-				 AT91_PIOB 17 AT91_PERIPH_GPIO AT91_PINCTRL_PULL_DOWN>;	/* Enable CAN Transceivers */
 		};
 	};
 
@@ -314,31 +282,34 @@
 				<AT91_PIOA 0 AT91_PERIPH_A AT91_PINCTRL_PULL_UP
 				 AT91_PIOA 1 AT91_PERIPH_A AT91_PINCTRL_PULL_UP>;
 		};
-
-		pinctrl_flx6_default: flx6-twi {
+		
+		pinctrl_flx1_default: flx1-spi {
 			atmel,pins =
-				<AT91_PIOA 30 AT91_PERIPH_A AT91_PINCTRL_PULL_UP
-				 AT91_PIOA 31 AT91_PERIPH_A AT91_PINCTRL_PULL_UP>;
+				<AT91_PIOA 5 AT91_PERIPH_A AT91_PINCTRL_NONE>;
 		};
 
-		pinctrl_flx7_default: flx7-usart {
+		pinctrl_flx2_default: flx2-usart {
 			atmel,pins =
-				<AT91_PIOC 0 AT91_PERIPH_C AT91_PINCTRL_NONE
-				 AT91_PIOC 1 AT91_PERIPH_C AT91_PINCTRL_NONE>;
+				<AT91_PIOA 7 AT91_PERIPH_A AT91_PINCTRL_NONE
+				 AT91_PIOA 8 AT91_PERIPH_A AT91_PINCTRL_NONE>;
+		};
+
+		pinctrl_flx5_default: flx5-usart {
+			atmel,pins =
+				<AT91_PIOA 22 AT91_PERIPH_A AT91_PINCTRL_NONE
+				 AT91_PIOA 21 AT91_PERIPH_A AT91_PINCTRL_NONE>;
 		};
 	};
 
 	gpio-keys {
 		pinctrl_key_gpio_default: pinctrl-key-gpio {
-			atmel,pins = <AT91_PIOA 29 AT91_PERIPH_GPIO AT91_PINCTRL_NONE>;
+			atmel,pins = <AT91_PIOA 30 AT91_PERIPH_GPIO AT91_PINCTRL_NONE>;
 		};
 	};
 
 	leds {
 		pinctrl_gpio_leds: gpio-leds {
-			atmel,pins = <AT91_PIOD 17 AT91_PERIPH_GPIO AT91_PINCTRL_NONE
-				      AT91_PIOD 19 AT91_PERIPH_GPIO AT91_PINCTRL_NONE
-				      AT91_PIOD 21 AT91_PERIPH_GPIO AT91_PINCTRL_NONE>;
+			atmel,pins = <AT91_PIOA 31 AT91_PERIPH_GPIO AT91_PINCTRL_NONE>;
 		};
 	};
 
@@ -377,20 +348,6 @@
 		};
 	};
 
-	pwm0 {
-		pinctrl_pwm0_0: pwm0-0 {
-			atmel,pins = <AT91_PIOB 12 AT91_PERIPH_B AT91_PINCTRL_NONE>;
-		};
-
-		pinctrl_pwm0_1: pwm0-1 {
-			atmel,pins = <AT91_PIOB 13 AT91_PERIPH_B AT91_PINCTRL_NONE>;
-		};
-
-		pinctrl_pwm0_2: pwm0-2 {
-			atmel,pins = <AT91_PIOD 16 AT91_PERIPH_B AT91_PINCTRL_NONE>;
-		};
-	};
-
 	sdmmc0 {
 		pinctrl_sdmmc0_default: sdmmc0 {
 			atmel,pins =
@@ -408,18 +365,6 @@
 		};
 	};
 
-	sdmmc1 {
-		pinctrl_sdmmc1_default: sdmmc1 {
-			atmel,pins =
-				<AT91_PIOA 13 AT91_PERIPH_B (AT91_PINCTRL_DRIVE_STRENGTH_HI)				/* PA13 CK periph B */
-				 AT91_PIOA 12 AT91_PERIPH_B (AT91_PINCTRL_PULL_UP | AT91_PINCTRL_DRIVE_STRENGTH_HI)	/* PA12 CMD periph B with pullup */
-				 AT91_PIOA 11 AT91_PERIPH_B (AT91_PINCTRL_PULL_UP | AT91_PINCTRL_DRIVE_STRENGTH_HI)	/* PA11 DAT0 periph B with pullup */
-				 AT91_PIOA 2 AT91_PERIPH_B (AT91_PINCTRL_PULL_UP | AT91_PINCTRL_DRIVE_STRENGTH_HI)	/* PA2 DAT1 periph B with pullup */
-				 AT91_PIOA 3 AT91_PERIPH_B (AT91_PINCTRL_PULL_UP | AT91_PINCTRL_DRIVE_STRENGTH_HI)	/* PA3 DAT2 periph B with pullup */
-				 AT91_PIOA 4 AT91_PERIPH_B (AT91_PINCTRL_PULL_UP | AT91_PINCTRL_DRIVE_STRENGTH_HI)>;	/* PA4 DAT3 periph B with pullup */
-		};
-	};
-
 	usb0 {
 		pinctrl_usba_vbus: usba-vbus {
 			atmel,pins = <AT91_PIOA 27 AT91_PERIPH_GPIO AT91_PINCTRL_NONE>;
@@ -434,12 +379,6 @@
 	};
 }; /* pinctrl */
 
-&pwm0 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_pwm0_0 &pinctrl_pwm0_1 &pinctrl_pwm0_2>;
-	status = "okay";
-};
-
 &rtt {
 	atmel,rtt-rtc-time-reg = <&gpbr 0x0>;
 };
@@ -449,14 +388,6 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_sdmmc0_default &pinctrl_sdmmc0_cd>;
 	cd-gpios = <&pioA 25 GPIO_ACTIVE_LOW>;
-	disable-wp;
-	status = "okay";
-};
-
-&sdmmc1 {
-	bus-width = <4>;
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_sdmmc1_default>;
 	disable-wp;
 	status = "okay";
 };
