@@ -200,6 +200,17 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_flx1_default>;
 		status = "okay";
+		
+		cs-gpios = <0>;  // Disable hardware CS (optional)
+		num-cs = <0>;    // Explicitly disable CS lines
+		
+		spidev@0 {
+			compatible = "spidev";
+			reg = <0>; // Dummy chip Select, unused for WS2812
+			spi-max-frequency = <3200000>; // Max SPI clock (3.2MHz for WS2812)
+			spi-cpol;    // CPOL=1 (idle high)
+			spi-cpha;    // CPHA=1 (data captured on second edge)
+		};
 	};
 };
 
