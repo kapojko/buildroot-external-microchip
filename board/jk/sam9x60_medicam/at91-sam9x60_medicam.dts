@@ -157,12 +157,12 @@
 
 				kernel@200000 {
 					label = "kernel";
-					reg = <0x200000 0x600000>;
+					reg = <0x200000 0x800000>;
 				};
 
-				rootfs@800000 {
+				rootfs@a00000 {
 					label = "rootfs";
-					reg = <0x800000 0x1f800000>;
+					reg = <0xa00000 0x7600000>;
 				};
 			};
 		};

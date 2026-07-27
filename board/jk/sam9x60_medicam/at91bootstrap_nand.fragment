@@ -1,0 +1,15 @@
+# at91bootstrap3 fragment — overlay on top of sam9x60_curiositynf_uboot_defconfig
+# Adjusts the upstream SAM9X60-Curiosity NAND defconfig for the SAM9X60-Medicam board.
+#
+# Upstream defconfig turns on the Curiosity RGB LED (PD17/19/21) and probes an
+# I²C EEPROM at addr 0x53. The Medicam board has its status LED on PA31 and its
+# EEPROM at 0x50. Disabling these prevents spurious pin toggles at boot and a
+# benign but confusing EEPROM probe failure.
+
+CONFIG_LED_ON_BOARD=n
+CONFIG_LED_R_ON_PIOD=n
+CONFIG_LED_G_ON_PIOD=n
+CONFIG_LED_B_ON_PIOD=n
+
+CONFIG_LOAD_EEPROM=n
+CONFIG_EEPROM_ADDR=0x50

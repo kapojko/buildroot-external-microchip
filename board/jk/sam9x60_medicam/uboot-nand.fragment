@@ -1,0 +1,40 @@
+# U-Boot config fragment — overlay on top of sam9x60_curiosity_nandflash_defconfig.
+#
+# Necessary because the upstream defconfig leaves CONFIG_ENV_OFFSET at the
+# U-Boot default (= 0x60000), which lands INSIDE the u-boot partition
+# (0x40000..0x100000) on the Medicam NAND layout. With that default, a
+# `saveenv` would write back to 0x60000 and silently corrupt the bootloader.
+#
+# The Medicam layout (see genimage-nand.cfg, at91-sam9x60_medicam.dts):
+#   mtd2  0x100000..0x140000  env_redundant
+#   mtd3  0x140000..0x180000  env (primary)
+#
+# CONFIG_ENV_SIZE=0x20000 (128 KiB) is the U-Boot default; the partition
+# itself is 256 KiB, leaving half for UBI-style wear leveling on the
+# redundant copy if it ever grows. The host-side env image is built with
+# BR2_PACKAGE_HOST_UBOOT_TOOLS_ENVIMAGE_SIZE=0x40000 = 256 KiB so the
+# first 128 KiB is the active env (written by mkenvimage at the start
+# of the file) and the remaining 128 KiB is padding U-Boot ignores.
+#
+# Note: the BR2_PACKAGE_HOST_UBOOT_TOOLS_ENVIMAGE_REDUNDANT=y setting
+# does NOT add a redundant copy to the same mtd here — it is a flag
+# inside mkenvimage's env header. The "real" redundancy for the Medicam
+# layout comes from writing the same env image to TWO separate mtds.
+
+CONFIG_ENV_IS_IN_NAND=y
+CONFIG_SYS_REDUNDAND_ENVIRONMENT=y
+CONFIG_ENV_OFFSET=0x140000
+CONFIG_ENV_OFFSET_REDUND=0x100000
+CONFIG_ENV_SIZE=0x20000
+
+# Correct kernel size (8 MiB) so the compiled-in fallback bootcmd would
+# still work if env is unreadable. Medicam's uboot-env-nand.txt overrides
+# this at runtime.
+CONFIG_BOOTARGS="console=ttyS0,115200 earlyprintk mtdparts=atmel_nand:256k(bootstrap)ro,768k(uboot)ro,256k(env_redundant),256k(env),512k(dtb),8M(kernel)ro,118M(rootfs) ubi.mtd=6 root=ubi0:rootfs rw rootfstype=ubifs"
+CONFIG_BOOTCOMMAND="nand read 0x22000000 0x200000 0x800000; nand read 0x21000000 0x180000 0x20000; bootz 0x22000000 - 0x21000000"
+
+# Use the Medicam DT as U-Boot's fallback (only used if runtime DTB load
+# from NAND fails; normally the env-driven bootcmd_boot handles it).
+CONFIG_USE_BOOTARGS=y
+CONFIG_USE_BOOTCOMMAND=y
+CONFIG_DEFAULT_DEVICE_TREE="at91-sam9x60_medicam"

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-2.0
+# Files that must stay executable across all OS checkouts (especially
+# Windows host -> WSL2 build). Use gitattributes instead of the legacy
+# "remember to chmod +x" dance.
+
+# Post-image / post-build shell scripts invoked by Buildroot via
+# BR2_ROOTFS_POST_*_SCRIPT. Without +x these fail with 'Permission denied'
+# on Linux/WSL no matter what mode git records in the index.
+*.sh                                 text eol=lf executable
+board/**/post-image-pre.sh           text eol=lf executable
+board/**/post_build.sh               text eol=lf executable
+board/**/fs-overlay/usr/bin/*.sh     text eol=lf executable
+board/**/fs-overlay/etc/init.d/S*    text eol=lf executable
+configs/post-image*.sh               text eol=lf executable
+configs/post-build*.sh               text eol=lf executable
+
+# PowerShell flashing script (executable via PowerShell -File).
+*.ps1                                text eol=crlf
+
+# Linux device tree source — WSL/Linux only, never CRLF.
+*.dts                                text eol=lf
+*.dtsi                               text eol=lf
+
+# Kconfig / defconfig fragments — must be LF for kconfig parser.
+*.fragment                           text eol=lf
+*.config                             text eol=lf
+*_defconfig                          text eol=lf
