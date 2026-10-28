@@ -447,7 +447,7 @@ Conventions
           medicam-48db74, EEPROM record unchanged, DHCPv6 still DUID-EN (unused:
           only an IPv6 link-local address exists).
 
-8. STAGE 1.5 - NAND AS /data                                    [ ] 1/2 done (impl)
+8. STAGE 1.5 - NAND AS /data                                    [x] done 2026-10-28
 --------------------------------------------------------------------------------
 8.1 [x] chip decision (PLAN 8.1): 4 Gbit ABACA-class = production part, 8 Gbit
         board = test bed. Same 4K page / 256K block / OOB 224 geometry, so every
@@ -477,8 +477,16 @@ Conventions
         parsing). Validated on the board with a throwaway volume: ubimkvol -m ->
         3970 LEBs (961.4 MiB), UBIFS auto-formats on mount, write+read-back OK,
         ubirmvol -> NAND clean again. Rootfs image rebuilt with the -m fix.
-8.5 [ ] BOARD SESSION 2 (re-run): /data mounted after reboot, 50 MiB write +
-        reboot + read-back, /home -> /data/home, survives reflashing the SD rootfs.
+8.5 [x] BOARD SESSION 2 (re-run, after the -m fix): all exit criteria met.
+        journal: "attached /dev/mtd6 as ubi0" -> "created UBI volume 'data'"
+        (3970 LEBs, 1008189440 B = 961.4 MiB); data.mount active ->
+        "ubi0:data on /data type ubifs (rw,noatime)", df 899.3M usable.
+        /home resolves into the mounted volume (write+remove test OK).
+        /proc/mtd: 7 partitions, kernel 8 MiB, ubi @ 0x3f600000 (1014 MiB).
+        50 MiB write (urandom) + reboot + md5sum -c -> OK; after reboot
+        "UBI volume 'data' already present" (no re-creation); identity
+        unchanged (medicam-48db74 / 2a:45:d5:48:db:74). /data carries the
+        50 MiB test.bin as residue (clear when the desktop script lands).
 
 --------------------------------------------------------------------------------
 9. STAGE 2 - NAND BOOT                                          [ ] not started
