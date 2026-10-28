@@ -489,19 +489,47 @@ Conventions
         50 MiB test.bin as residue (clear when the desktop script lands).
 
 --------------------------------------------------------------------------------
-9. STAGE 2 - NAND BOOT                                          [ ] not started
+9. STAGE 2 - NAND BOOT                                [ prep done, build pending ]
 --------------------------------------------------------------------------------
-9.1 [ ] at91bootstrap PMECC OOB 224 fragment, eccOffset 120 in boot.bin.pmecc header
-9.2 [ ] uboot-nand.fragment (ENV in NAND, offset 0x140000 / redundant 0x100000)
-9.3 [~] uboot-env-nand.txt committed frozen (PLAN 8.2); needs the NAND defconfig +
-        post-image-pre.sh wiring to be built
-9.4 [ ] UBIFS/UBI target options (LEB 0x3e000, min-io 0x1000, subpage 0x200, numpebs 4056/2024)
-9.5 [~] genimage-nand.cfg committed frozen (8 Gbit geometry, numpebs 4056); needs the
-        NAND defconfig + post-image-pre.sh wiring
-9.6 [~] flash-nand.sh committed frozen (8 Gbit eraseblock counts); to be installed in
-        the rescue SD rootfs by the NAND defconfig
-9.7 [ ] BOARD SESSION 3: SD boot -> flash-nand.sh -> power off -> remove SD -> NAND boot
-        10x reboot + 5x power cut, then the SAM-BA recovery path (-d sam9x60d1g)
+9.1 [x] at91bootstrap PMECC OOB 224 fragment written (at91bootstrap_nand.fragment:
+        PMECC_OOB_224=y, PMECC_OOB_256 off - chip measured 224 in stage 1, F2).
+        TO VERIFY after build: boot.bin.pmecc header eccOffset = 120 (was 152).
+9.2 [x] uboot-nand.fragment written (ENV_IS_IN_NAND, ENV_OFFSET 0x140000 /
+        redundant 0x100000, ENV_SIZE 0x20000, fallback BOOTARGS/BOOTCOMMAND with
+        the frozen values). DELIBERATELY no CONFIG_DEFAULT_DEVICE_TREE override:
+        no at91-sam9x60_medicam.dts exists in u-boot-mchp (base curiosity dts is
+        only a compile-time fallback; runtime dtb is loaded from NAND by bootcmd).
+9.3 [x] uboot-env-nand.txt frozen (no mtdparts on cmdline; DTS is the source of
+        truth); wired via sam9x60_medicam_nand_defconfig + post-image-pre.sh
+        (regenerates uboot-env.bin from source, size 0x40000, redundant).
+9.4 [x] UBIFS/UBI target options in defconfig: LEBSIZE 0x3e000, MINIOSIZE 0x1000,
+        MAXLEBCNT 2082, UBI PEBSIZE 0x40000, UBI_SUBSIZE 0x200. Kernel already has
+        UBIFS_FS_LZO=y (buildroot default lzo compression works).
+9.5 [x] genimage-nand.cfg wired via BR2_ROOTFS_POST_SCRIPT_ARGS (NAND defconfig).
+9.6 [x] flash-nand.sh: NAND u-boot payload now read as u-boot-nand.bin (the
+        /boot/u-boot.bin on the rescue card is the SD-variant bootloader that
+        boots the card itself).
+9.7 [x] RESCUE-SD DESIGN (replaces the untrusted medicam_nand "NAND defconfig
+        emits its own bootable rescue SD" idea): a single bootloader variant per
+        buildroot build means the NAND build cannot boot from SD. Rescue card =
+        NAND build's sdcard.img (256 M FAT already carries all NAND payloads,
+        incl. rootfs.ubifs) + SD-variant boot.bin/u-boot.bin swapped in +
+        u-boot-nand.bin + flash-nand.sh. Assembled by make-rescue-sd.sh via
+        mtools (FAT at byte offset 1 MiB, "@@offset" syntax - verified against a
+        built sdcard.img). mtools installed on the WSL host (host prep).
+9.8 [x] TWO-BUILD WORKFLOW decided: SD defconfig (output/, in-tree) + NAND
+        defconfig (output-nand/, O=). NAND tree shares the host via symlink
+        output-nand/host -> output/host (paths baked into the toolchain stay
+        valid; no recompile). make_clean_no_host.sh cleans build/target/images
+        WITHOUT host (buildroot has no dirclean; make clean rm -rf's HOST_DIR).
+        Toggling SD<->NAND defconfigs needs NO clean (same package set).
+9.9 [ ] BUILD PENDING (user runs, chained && sequentially - shared host must not
+        be built in parallel): SD tree make_clean_no_host.sh + make, then
+        NAND tree make O=output-nand ... + make. Then make-rescue-sd.sh, then
+        BOARD SESSION 3.
+9.10[ ] BOARD SESSION 3: SD boot (rescue card) -> /boot/flash-nand.sh -> power
+        off -> remove SD -> NAND boot; 10x reboot + 5x power cut; then SAM-BA
+        recovery path (-b sam9x60d1g, no ::no_extram - F4).
 
 --------------------------------------------------------------------------------
 10. OPEN ITEMS / PENDING DECISIONS
@@ -513,7 +541,7 @@ Conventions
           mounted volume by medicam-data-init.service (decided in stage 1.5)
 10.6 [ ] `lsusb` prints "unable to initialize usb spec" (no /usr/share/hwdata/usb.ids).
           Either add hwdata + usb ids (~1 MiB) for readable device names, or accept.
-10.5 [ ] batch these trims into the stage 1.5 clean rebuild (~7 MiB): set
-          BR2_PACKAGE_SYSTEMD_VCONSOLE_DEFAULT_KEYMAP=""
-          (drops kbd + keymaps + consolefonts, ~5 MiB, the board has no display), and turn
-          BR2_TOOLCHAIN_BUILDROOT_CXX off (libstdc++ 1.8 MiB, nothing is C++).
+10.5 [~] trims: kbd/vconsole-keymap DONE in the defconfig
+        (BR2_PACKAGE_SYSTEMD_VCONSOLE_DEFAULT_KEYMAP="" drops kbd ~5 MiB; host-safe).
+        C++/libstdc++ (~1.8 MiB) DELIBERATELY DEFERRED: turning CXX off forces a
+        one-time cross-toolchain rebuild, which fights the shared-host goal.

@@ -1,0 +1,29 @@
+# at91bootstrap3 config fragment — overlay on sam9x60_curiositynf_uboot_defconfig.
+# Stage 2 (PLAN 2.1). Adjusts the upstream SAM9X60-Curiosity NAND preset for the
+# SAM9X60-Medicam board.
+#
+# 1) PMECC OOB size (PLAN F2, gated by the stage-1 mtdinfo measurement):
+#    the curiosity NAND presets assume a 4 Gb Macronix chip with 256-byte OOB;
+#    the Medicam MT29F8G08ABACAWP has 224-byte OOB (measured: oobsize 224).
+#    The ROM decodes the bootstrap using the PMECC header in boot.bin.pmecc, so
+#    this MUST match the chip: with OOB 256 the generated header has
+#    eccOffset = 152, with OOB 224 it is 120. Verify after build:
+#      xxd -l 16 output/images/boot.bin.pmecc   (and check addpmecchead.py)
+#    Pagesize 4096 and 8-bit correction stay at the preset defaults.
+#
+# 2) Curiosity-only hardware that does not exist on Medicam:
+#    RGB LED on PD17/PD19/PD21 (Medicam status LED is on PA31) and the I2C
+#    EEPROM probe at 0x53 (Medicam EEPROM is at 0x50, handled in Linux by
+#    medicam-identity.service). Disabling avoids spurious pin toggles and a
+#    confusing EEPROM probe failure at boot.
+
+# CONFIG_PMECC_OOB_256 is not set
+CONFIG_PMECC_OOB_224=y
+
+CONFIG_LED_ON_BOARD=n
+CONFIG_LED_R_ON_PIOD=n
+CONFIG_LED_G_ON_PIOD=n
+CONFIG_LED_B_ON_PIOD=n
+
+CONFIG_LOAD_EEPROM=n
+CONFIG_EEPROM_ADDR=0x50

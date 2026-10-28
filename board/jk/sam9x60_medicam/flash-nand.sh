@@ -2,9 +2,14 @@
 # SPDX-License-Identifier: GPL-2.0
 #
 # flash-nand.sh — write the SAM9X60-Medicam NAND from files on the SD card
-# boot partition. Operator boots from SD (with the medicam-nand build), mounts
-# the boot partition at /boot, runs this script, powers off, removes the SD
-# card, and the next power-on boots directly from NAND (stage 2).
+# boot partition. The operator boots from the rescue SD (built by
+# make-rescue-sd.sh: SD bootloaders + all NAND payloads on the 256 MiB FAT),
+# mounts the boot partition at /boot, runs this script, powers off, removes
+# the SD card, and the next power-on boots directly from NAND (stage 2).
+#
+# NOTE on the file names: the NAND u-boot payload lives on /boot as
+# u-boot-nand.bin, NOT u-boot.bin — u-boot.bin on the rescue card is the
+# SD-variant bootloader that boots the card itself (see make-rescue-sd.sh).
 #
 # Usage:
 #   flash-nand.sh                # flash everything (with confirmation prompt)
@@ -44,7 +49,7 @@ EB_KB=256
 #   it needs to write to BOTH mtd2 (redundant) and mtd3 (primary).
 PARTITIONS="
 bootstrap|/dev/mtd0|boot.bin.pmecc|1|raw
-uboot|/dev/mtd1|u-boot.bin|3|raw
+uboot|/dev/mtd1|u-boot-nand.bin|3|raw
 dtb|/dev/mtd4|at91-sam9x60_medicam.dtb|2|raw
 kernel|/dev/mtd5|zImage|32|raw
 rootfs|/dev/mtd6|rootfs.ubifs|4056|ubi

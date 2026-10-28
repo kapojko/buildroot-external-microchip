@@ -1,0 +1,30 @@
+# U-Boot config fragment — overlay on sam9x60_curiosity_nandflash_defconfig.
+# Stage 2 (PLAN 2.2).
+#
+# Why this fragment exists:
+#  * The upstream defconfig leaves CONFIG_ENV_OFFSET at the U-Boot default
+#    0x60000, which lands INSIDE the u-boot partition (0x40000..0x100000) on
+#    the Medicam NAND layout. A `saveenv` would write back to 0x60000 and
+#    silently corrupt the bootloader.
+#  * The upstream BOOTARGS/BOOTCOMMAND use stale curiosity values (6 MiB
+#    kernel, ubi.mtd=12, an mtdparts= cmdline). We override them with the
+#    frozen Medicam values. No mtdparts on the cmdline: the kernel takes the
+#    partition layout from the DTS (single source of truth).
+#  * CONFIG_DEFAULT_DEVICE_TREE stays at the base "at91-sam9x60_curiosity":
+#    there is no at91-sam9x60_medicam.dts in the u-boot-mchp tree, and the
+#    runtime DTB is loaded from NAND by bootcmd anyway.
+#
+# Frozen layout (matches genimage-nand.cfg / at91-sam9x60_medicam.dts /
+# flash-nand.sh / uboot-env-nand.txt):
+#   mtd2  0x100000..0x140000  env_redundant
+#   mtd3  0x140000..0x180000  env (primary)
+#   mtd5  kernel 8 MiB @ 0x200000, mtd6 ubi
+
+CONFIG_ENV_IS_IN_NAND=y
+CONFIG_SYS_REDUNDAND_ENVIRONMENT=y
+CONFIG_ENV_OFFSET=0x140000
+CONFIG_ENV_OFFSET_REDUND=0x100000
+CONFIG_ENV_SIZE=0x20000
+
+CONFIG_BOOTARGS="console=ttyS0,115200 earlyprintk ubi.mtd=6 root=ubi0:rootfs rootfstype=ubifs rw rootwait cma=16m atmel.pm_modes=standby,ulp0"
+CONFIG_BOOTCOMMAND="nand read 0x22000000 0x200000 0x800000; nand read 0x21000000 0x180000 0x20000; bootz 0x22000000 - 0x21000000"

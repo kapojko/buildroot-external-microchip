@@ -142,6 +142,62 @@ was a plain directory in the rootfs). The desktop script and the user
 application reach it through the contract in PLAN section 11
 (`RequiresMountsFor=/data`).
 
+Two builds and the field flow (stage 2)
+----------------------------------------
+There are two defconfigs; both are kept. Buildroot builds one bootloader
+variant per build, so neither can do the other's job:
+
+| Defconfig | Tree | Produces | Role |
+|---|---|---|---|
+| `sam9x60_medicam_defconfig` | `output/` (in-tree) | SD-runtime `sdcard.img` | fallback + dev/debug image |
+| `sam9x60_medicam_nand_defconfig` | `output-nand/` (`O=`) | NAND payloads + a rescue base image (256 M FAT carrying every payload incl. `rootfs.ubifs`) | the field/programming build |
+
+The NAND build's own `sdcard.img` cannot boot from SD (its bootloaders are
+NAND variants). The **rescue card** is assembled from both builds:
+
+    make-rescue-sd.sh            # default: output-nand/ + output/
+    #  base   = NAND sdcard.img  (256 M FAT: all NAND payloads)
+    #  swap   = SD boot.bin / u-boot.bin  (so the card boots from SD)
+    #  add    = u-boot-nand.bin (NAND u-boot payload) + flash-nand.sh
+    #  result = <nand_output>/images/sdcard-rescue.img
+    #  needs  mtools on the host (sudo apt install mtools)
+
+Field flow: Etcher `sdcard-rescue.img` -> boot -> `/boot/flash-nand.sh` -> power
+off -> remove the SD card -> the board boots from NAND (no SD needed). The SD
+card is only a programming/rescue medium; the SD defconfig stays as the
+fallback shipping config and the everyday dev image.
+
+Host / rebuild strategy
+-----------------------
+The NAND tree reuses the SD tree's host toolchain instead of recompiling it:
+
+    cd ~/src/buildroot-mchp
+    make O=output-nand BR2_EXTERNAL=~/src/buildroot-external-microchip sam9x60_medicam_nand_defconfig
+    ln -s output/host output-nand/host     # share the 723 MiB host (paths stay valid)
+    make O=output-nand BR2_EXTERNAL=~/src/buildroot-external-microchip
+
+Caveats:
+* build the two trees **sequentially**, never in parallel (shared host dir);
+* buildroot has **no `dirclean`** target, and `make clean` deletes `output/host`
+  (a ~50% rebuild). For a clean rebuild without touching the host use
+  `make_clean_no_host.sh` (removes build/target/staging/images, keeps host + dl):
+
+      board/jk/sam9x60_medicam/make_clean_no_host.sh            # SD tree
+      board/jk/sam9x60_medicam/make_clean_no_host.sh ~/src/buildroot-mchp output-nand   # NAND tree
+
+* **toggling between the two defconfigs needs NO clean** - the package set is
+  identical; just `make <defconfig>` + `make`.
+* a clean is only required when the package set changes (PLAN F22).
+
+Recovery (SAM-BA)
+-----------------
+If the SD rescue path is unavailable (dead rootfs, first bring-up), flash the
+raw `medicam-nand.img` over USB-CDC with `sam-ba-flash-nand.ps1` (PowerShell,
+run on Windows). It uses `-b sam9x60d1g` (correct SiP DDR2 preset, PLAN F4) and
+`-a nandflash:1:8:0xc2605007` with the applet buffer in DRAM (no `::no_extram`).
+Writing ~1 GiB over serial is slow - the SD rescue path is the primary one
+(PLAN F21).
+
 NAND layout (frozen)
 --------------------
 The same table is frozen in the DTS partitions node, `uboot-env-nand.txt`,
@@ -194,6 +250,15 @@ uboot-env.txt                  U-Boot environment (SD boot: bootz from FAT)
 uboot-env-nand.txt             U-Boot environment (NAND boot, stage 2, frozen)
 genimage-nand.cfg              NAND build images (stage 2, frozen)
 flash-nand.sh                  SD-rescue NAND flasher (stage 2, frozen)
+make-rescue-sd.sh              assemble the rescue SD from both builds (mtools)
+make_clean_no_host.sh          clean a buildroot output without touching host
+post-image-pre.sh              NAND build: copies boot.bin.pmecc + regenerates
+                               uboot-env.bin (run before genimage)
+at91bootstrap_nand.fragment    at91bootstrap fragment: PMECC OOB 224, no curiosity
+                               LED/EEPROM probe
+uboot-nand.fragment            U-Boot fragment: ENV in NAND at 0x140000/0x100000,
+                               frozen fallback bootargs/bootcmd
+sam-ba-flash-nand.ps1          SAM-BA recovery flash (PowerShell, PLAN F4)
 post-build.sh                  rootfs post-build: /home -> data/home symlink
 fs-overlay/                    rootfs overlay: sshd_config, journald.conf.d,
                                motd, medicam-hostname/identity/data services +
