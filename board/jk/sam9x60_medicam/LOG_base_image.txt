@@ -438,9 +438,14 @@ Conventions
         the DUID is derived from /etc/machine-id, so after every reflash the router
         sees a new client and withholds the old lease until it expires/backoff.
         fix: eth0.network.d/10-client-id.conf -> [DHCPv4] ClientIdentifier=mac
-        (lease identity now follows the EEPROM MAC). Verify after flashing stage1d:
-          networkctl status eth0 | grep "Client ID"   -> .../MAC
-          lease acquired within a few seconds of carrier.
+        (lease identity now follows the EEPROM MAC).
+        VERIFIED after flashing sdcard-medicam-stage1d.img (sha256 cc7093db...):
+          networkctl: "DHCPv4 Client ID: 2a:45:d5:48:db:74"   (was IAID:.../DUID)
+          carrier 15:42:57 -> "DHCPv4 address 192.168.3.17/24 ... acquired"
+          15:42:57, i.e. in the same second (was 4.5 min after the MAC change)
+          identity: "EEPROM identity ok: mac=2a45d548db74", MAC set, hostname
+          medicam-48db74, EEPROM record unchanged, DHCPv6 still DUID-EN (unused:
+          only an IPv6 link-local address exists).
 
 8. STAGE 1.5 - NAND AS /data                                    [ ] not started
 --------------------------------------------------------------------------------

@@ -358,6 +358,9 @@ the board stayed without an address for 4.5 min (carrier 09:03:43 → lease
 Fix: `fs-overlay/etc/systemd/network/eth0.network.d/10-client-id.conf` with
 `[DHCPv4] ClientIdentifier=mac`, so leases follow the EEPROM MAC (F24) and
 reflashing neither churns leases nor renames the board at the router.
+**Verified:** `DHCPv4 Client ID: 2a:45:d5:48:db:74` and the lease is acquired in
+the same second as carrier (was 4.5 min). DHCPv6 keeps a machine-id DUID, which
+is irrelevant here — the board only has an IPv6 link-local address.
 
 **F19 — U-Boot/partition margin is thin.** `u-boot.bin` is 580 184 B in a 768 KiB
 partition; `zImage` is 5.6 MiB. The `medicam` DTS allots only 6 MiB to the kernel
