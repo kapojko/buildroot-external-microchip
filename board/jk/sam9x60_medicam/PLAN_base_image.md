@@ -347,6 +347,18 @@ requires an identity that survives reflashing. Fix: store the MAC (and later a
 board serial) in the on-board 24C256 EEPROM (blank, 32 KiB) and apply it before
 `systemd-networkd` → new task in stage 1.5.
 
+**F25 — the DHCP client id is a DUID derived from `machine-id`, not the MAC.**
+Measured on the board: `networkctl status eth0` → `DHCPv4 Client ID:
+IAID:0x1ba59b32/DUID`, `DUID-EN/Vendor:0000ab11…`, and
+`/var/lib/systemd/network/` is empty, i.e. the DUID is regenerated from
+`/etc/machine-id` on every boot. Even with the EEPROM MAC restored (F24), a
+reflash therefore presents the router with a *new* DHCP client: after one reflash
+the board stayed without an address for 4.5 min (carrier 09:03:43 → lease
+09:08:18) while the server kept the old lease for the previous client id.
+Fix: `fs-overlay/etc/systemd/network/eth0.network.d/10-client-id.conf` with
+`[DHCPv4] ClientIdentifier=mac`, so leases follow the EEPROM MAC (F24) and
+reflashing neither churns leases nor renames the board at the router.
+
 **F19 — U-Boot/partition margin is thin.** `u-boot.bin` is 580 184 B in a 768 KiB
 partition; `zImage` is 5.6 MiB. The `medicam` DTS allots only 6 MiB to the kernel
 — too tight for growth. Use the `medicam_nand` values (8 MiB kernel, rootfs at

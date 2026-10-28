@@ -414,6 +414,34 @@ Conventions
         factory provisioning is out of scope: serial stays 0000000000000000 and
         can be overwritten later by the desktop script (same record).
 
+7.16 [x] blank-record path exercised on the real board (2026-10-28)
+        a) backup: "MCM1 1 mac=2a45d548db74 serial=0000000000000000 crc=983023561"
+        b) erase: dd if=/dev/zero of=/sys/bus/i2c/devices/0-0050/eeprom bs=96 count=1
+                  conv=notrunc   (read back: 16 x 00)
+        c) reboot -> journal:
+             "adopting the current MAC aed63b180b52"   (the kernel's random for that boot)
+             "EEPROM programmed: MCM1 1 mac=aed63b180b52 serial=... crc=2782462072"
+             "eth0 already uses ae:d6:3b:18:0b:52"
+           hostname became medicam-180b52, MAC ae:d6:3b:18:0b:52 (locally administered)
+        d) second reboot -> "EEPROM identity ok: mac=aed63b180b52", MAC set, no
+           reprogramming (programmed-count 0)  => the regenerated identity is stable
+        e) restore: wrote the original 96-byte record back (scp + dd), reboot ->
+           "EEPROM identity ok: mac=2a45d548db74", MAC 2a:45:d5:48:db:74,
+           hostname medicam-48db74, record identical to (a)
+        BOTH paths therefore work on hardware; the TRNG branch stays dormant while
+        macb keeps inventing an address to adopt (documented, harmless).
+
+7.17 [x] DHCP delay after a MAC change - root cause found (F25)
+        restore reboot: carrier 09:03:43, lease only at 09:08:18 (4.5 min).
+        networkctl: "DHCPv4 Client ID: IAID:0x1ba59b32/DUID",
+        "DUID-EN/Vendor:0000ab11...", and /var/lib/systemd/network/ is empty ->
+        the DUID is derived from /etc/machine-id, so after every reflash the router
+        sees a new client and withholds the old lease until it expires/backoff.
+        fix: eth0.network.d/10-client-id.conf -> [DHCPv4] ClientIdentifier=mac
+        (lease identity now follows the EEPROM MAC). Verify after flashing stage1d:
+          networkctl status eth0 | grep "Client ID"   -> .../MAC
+          lease acquired within a few seconds of carrier.
+
 8. STAGE 1.5 - NAND AS /data                                    [ ] not started
 --------------------------------------------------------------------------------
 8.1 [ ] chip decision from the measured rootfs size (2/4/8 Gbit, PLAN 8.1)
