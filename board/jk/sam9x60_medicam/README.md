@@ -12,6 +12,59 @@ PLAN_base_image.md   implementation plan, findings (F1..F21), stages, verificati
 LOG_base_image.txt   reproducible build/verify log, step by step, with measured
                      values. Update it in the same commit as the stage it documents.
 
+Build from a clean checkout
+----------------------------
+Host: WSL2 Debian (full host preparation: LOG_base_image.txt section 1).
+
+1. Host preparation (once). The Windows PATH must not leak into WSL, otherwise
+   the Windows make/gcc/find shadow the Linux ones:
+
+       sudo tee /etc/wsl.conf >/dev/null <<'EOF'
+       [interop]
+       appendWindowsPath = false
+       EOF
+       # then, from PowerShell:  wsl --shutdown
+       sudo apt install -y git make binutils build-essential diffutils gcc g++ bash \
+            patch gzip bzip2 perl tar cpio unzip rsync file bc findutils wget \
+            libssl-dev libncurses-dev ca-certificates
+
+2. Two sibling trees (the external tree must be reachable from the buildroot one):
+
+       git clone -b linux4microchip-2025.04 \
+           https://github.com/linux4microchip/buildroot-mchp.git ~/src/buildroot-mchp
+       git clone -b medicam_clean \
+           https://github.com/kapojko/buildroot-external-microchip.git \
+           ~/src/buildroot-external-microchip
+
+3. Configure and build:
+
+       cd ~/src/buildroot-mchp
+       make BR2_EXTERNAL=../buildroot-external-microchip sam9x60_medicam_defconfig
+       make -j$(nproc) 2>&1 | tee ~/src/build-medicam.log
+
+   A cold build takes ~30-45 min and downloads ~500 MB of linux-firmware data
+   (only the Ralink RT2xx blobs are installed). An incremental build takes
+   minutes: BR2_EXTERNAL is only needed for the defconfig selection, the
+   resulting .config carries it.
+
+4. Result: `output/images/sdcard.img` (~273 MiB) — write it to an SD card
+   (balenaEtcher on Windows, `dd` on Linux), insert, boot on the DBGU console
+   at 115200 8N1.
+
+**`make` never removes files from `output/target`.** After disabling packages,
+the old files stay there and still end up in the images, so any change of the
+package set needs a clean build:
+
+       make clean && make -j$(nproc)      # dl/ is kept, nothing re-downloads
+
+One harmless message is expected during image creation:
+
+       "/.../target/home" already exists and is not a directory.
+
+`makedevs` applies the `d /home` entry of `system/device_table.txt` to our
+`/home -> data/home` symlink (exit code stays 0, the symlink survives). The
+runtime counterpart of that rule is masked by `fs-overlay/etc/tmpfiles.d/home.conf`.
+
 Boot chain (SD card, stage 1)
 -----------------------------
 RomBOOT -> AT91Bootstrap 4.0.11 (sam9x60_curiositysd_uboot) -> U-Boot

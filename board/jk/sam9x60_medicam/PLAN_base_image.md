@@ -297,6 +297,19 @@ informative only, so a new `*.sh` must be added with
 in **stage 0** (extended with the overlay text patterns); audit
 `git ls-files -s -- '*.sh' | grep '^100644'` must stay empty for our scripts.
 
+**F22 — an incremental build cannot produce the trimmed image.** Buildroot does
+not delete files from `output/target` when a package is disabled, so after the
+stage 1 defconfig change a plain `make` regenerates the images *with* the old
+contents (measured: `output/target` stayed at 211 MiB, python3/vim/gdb/dhcpd still
+in `rootfs.tar`). Any package-set change therefore needs `make clean && make`
+(`dl/` is preserved, nothing is re-downloaded), and only then do the stage 1 size
+numbers in 3.2/7.3 mean anything. Related and expected: image creation prints
+`".../target/home" already exists and is not a directory.` — `makedevs` applying
+the `d /home 755` entry of `system/device_table.txt` to the `/home -> data/home`
+symlink (exit status 0, the symlink survives; the runtime twin, systemd's
+`Q /home` in `tmpfiles.d/home.conf`, is masked by the board overlay). → **Recorded
+in stage 1 (task 1.11) / LOG 7.11b**.
+
 **F19 — U-Boot/partition margin is thin.** `u-boot.bin` is 580 184 B in a 768 KiB
 partition; `zImage` is 5.6 MiB. The `medicam` DTS allots only 6 MiB to the kernel
 — too tight for growth. Use the `medicam_nand` values (8 MiB kernel, rootfs at
@@ -378,7 +391,7 @@ password, and contains all infrastructure needed by later stages.
 | 1.8 | DTS: add `&trng { status = "okay"; };` | `board/jk/sam9x60_medicam/at91-sam9x60_medicam.dts` |
 | 1.9 | **Guard `board/microchip/at91/post_build.sh`**: wrap the `mv dhcpd.service` / `rm wpa_supplicant.service` steps in existence checks (`[ -f … ] `) so a trimmed package set does not fail the build | `board/microchip/at91/post_build.sh` |
 | 1.10 | Additions: `BR2_PACKAGE_UTIL_LINUX_RFKILL=y`, `BR2_PACKAGE_LINUX_FIRMWARE=y` + `BR2_PACKAGE_LINUX_FIRMWARE_RALINK_RT2XX=y` (all three symbols confirmed present in buildroot 2025.02); `BR2_PACKAGE_WGET=y` is **already** in the defconfig (F15 satisfied) | defconfig |
-| 1.11 | Build, flash, verify (section 12), record numbers (rootfs MiB, `sdcard.img` MiB, `mtdinfo` geometry) | — |
+| 1.11 | Build (**clean**, see F22: `make clean && make`), flash, verify (section 12), record numbers (rootfs MiB, `sdcard.img` MiB, `mtdinfo` geometry) | — |
 
 Suggested commit granularity (one concern per commit):
 

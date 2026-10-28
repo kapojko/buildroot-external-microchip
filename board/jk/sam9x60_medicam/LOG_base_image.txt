@@ -260,6 +260,48 @@ Conventions
            (systemd needs the message bus at runtime), not a trim leftover
         -> after this the buildroot tree holds a medicam_clean .config; a plain `make`
            (no BR2_EXTERNAL needed) builds the same configuration
+7.11b [!] build #1 (5 min): INCREMENTAL - images produced, but NOT trimmed.
+        Rebuild required before the board session:
+          cd ~/src/buildroot-mchp && make clean && make -j$(nproc)
+        (dl/ is kept, so the ~500 MB linux-firmware tarball is not downloaded again)
+        what build #1 actually did:
+          - linux-firmware (new package: tarball download + extract, the progress bar)
+          - linux-custom (kernel, because of the fragment fix)
+          - target-finalize (overlays, post-build scripts) + rootfs ext2/tar + genimage
+          - no other package rebuilt (5 dirs touched in output/build)
+        why the images are not trimmed: buildroot never deletes files from
+        output/target when a package is disabled. Measured: du -sm output/target =
+        211 MiB (unchanged), and python3/vim/gdb/dhcpd/iptables/nft/htop/lua/gnutls/
+        bluetoothctl are still in output/target AND inside rootfs.tar/rootfs.ext2.
+        => the "expected ~110-115 MiB" number is only meaningful after a clean build.
+        verified good in build #1 (these are independent of the stale files):
+          - kernel fragment now effective: OVERLAY_FS, NAMESPACES, USER_NS, MEMCG,
+            BLK_CGROUP, CGROUP_{SCHED,PIDS,FREEZER,DEVICE}, EXT4_FS_POSIX_ACL,
+            TMPFS_POSIX_ACL, SYN_COOKIES, POSIX_MQUEUE, USB_CONFIGFS_ECM all =y
+          - rootfs.tar: ./home -> data/home and ./data/home/ present
+          - preset-all enabled multi-user.target.wants/{sshd,medicam-hostname}.service
+            NOTE: preset-all runs against output/build/buildroot-fs/<fs>/target, the
+            per-filesystem copy of output/target, which is deleted afterwards. An empty
+            output/target/etc/systemd/system/*.wants is therefore NORMAL; check the
+            image (tar tvf / debugfs), not output/target.
+          - /etc/shadow root hash, sshd_config (Include + PermitRootLogin yes),
+            journald drop-in, motd, medicam-hostname.service + helper
+          - sizes: sdcard.img 273 MiB, boot.vfat 16 MiB, rootfs.ext4 256 MiB nominal,
+            zImage 5.3 MiB, u-boot.bin 566 KiB (both fit the 16 MiB FAT partition)
+        two non-fatal 'makedevs' messages during image creation (exit status 0):
+          "/.../target/var/lib/dhcp" already exists and is not a directory.
+             stale /var/lib/dhcp -> /tmp symlink left by the dropped dhcp package;
+             disappears after the clean build (the package is gone).
+          "/.../target/home" already exists and is not a directory.
+             makedevs applies "d /home 755" from system/device_table.txt to our
+             /home -> data/home symlink. Harmless: makedevs keeps going and the
+             symlink survives (verified in rootfs.tar). Cannot be removed without
+             touching the shared device table, so it is documented in README.md.
+             The runtime twin of that rule (systemd's Q /home in
+             usr/lib/tmpfiles.d/home.conf) is masked by
+             fs-overlay/etc/tmpfiles.d/home.conf - verified: systemd-tmpfiles
+             --root=<dir> --create exits 0 and is silent with the mask, and only
+             warns without it.
 7.12 [ ] BOARD SESSION 1 (no SD in the card reader of the PC, card written from output/images/sdcard.img)
         - serial login asks for the root password                        [ ]
         - ssh root@medicam-xxxxxx with the password                      [ ]
@@ -309,3 +351,5 @@ Conventions
 10.1 [ ] root password: which value, and who rotates it per device (hash only in git)
 10.2 [ ] SD image writer used on the Windows side (balenaEtcher confirmed?)
 10.3 [ ] keep the historical "Buildroot BSP MediCam.md" as-is or fold it into this log?
+10.4 [ ] /home: keep the symlink (one harmless makedevs/tmpfiles message) or bind-mount
+          /data/home onto a real /home with a home.mount unit at stage 1.5?
