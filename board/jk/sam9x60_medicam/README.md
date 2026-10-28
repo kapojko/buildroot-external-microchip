@@ -52,8 +52,13 @@ Host: WSL2 Debian (full host preparation: LOG_base_image.txt section 1).
    at 115200 8N1.
 
 **`make` never removes files from `output/target`.** After disabling packages,
-the old files stay there and still end up in the images, so any change of the
-package set needs a clean build:
+the old files stay there and still end up in the images. Two ways out:
+
+* dropping one package (no toolchain change) — delete its files by hand, then
+  just regenerate the images (seconds, no recompile):
+  `rm -f <files of that package in output/target>` +
+  `rm -f output/images/{rootfs.ext2,rootfs.tar,sdcard.img,boot.vfat}` + `make`;
+* anything that changes the toolchain or several packages at once — clean:
 
        make clean && make -j$(nproc)      # dl/ is kept, nothing re-downloads
 

@@ -153,12 +153,13 @@ Sum of attributed packages ≈ 150 MiB; the remaining ~60 MiB is unattributed fl
 (systemd+udev, glibc, kernel modules, util-linux, iproute2, bash/busybox).
 
 **Stage 1 result (clean build, 2026-10-28) — the estimate above was pessimistic:**
-the trimmed image is **63 MiB** (`du -sm output/target`), `rootfs.tar` 61 MiB,
-2 901 files / 3 929 tar entries (was 11 541), `sdcard.img` **273 MiB**,
+the trimmed image is **55 MiB** (`du -sm output/target`; 63 MiB before `file` was
+dropped), `rootfs.tar` 52 MiB, 3 923 tar entries (was 11 541), `sdcard.img` **273 MiB**,
 `boot.vfat` 16 MiB with `zImage` 5.34 MiB + `u-boot.bin` 448 KiB.
-Largest installed packages now: systemd 10.5, file 8.3, openssh 5.8, libopenssl 4.2,
+Largest installed packages now: systemd 10.5, openssh 5.8, libopenssl 4.2,
 util-linux 3.6, linux (modules) 3.2, glibc 2.1, kbd 2.0, gcc-final (libstdc++) 1.8,
-tzdata 1.7, iproute2 1.7 MiB. Unattributed overlap ≈ 6 MiB.
+tzdata 1.7, iproute2 1.7 MiB. Unattributed overlap ≈ 6 MiB. (Sorted before the
+`file` drop, which removed the then-largest entry.)
 Two items from the drop list do not actually leave the image: `kbd` (pulled in by
 systemd's default vconsole keymap, ≈ 5 MiB with keymaps + consolefonts) and
 busybox applet symlinks such as `usr/bin/tree` (a symlink, no bytes) — see the
@@ -451,7 +452,7 @@ Drop-ins instead of whole-file replacement where systemd/sshd support them
 
 **KEEP** — systemd (+networkd, timesyncd, journald), openssh, libopenssl(+`openssl`
 CLI), ca-certificates, util-linux (binaries + **rfkill**), bash, grep, nano, kmod
-(+tools), strace, usbutils, wget, file, tzdata, time, which, iproute2, ethtool,
+(+tools), strace, usbutils, wget, tzdata, time, which, iproute2, ethtool,
 tcpdump, netcat-openbsd, rsync, wpa_supplicant (CLI only), iw, wireless-regdb,
 i2c-tools, spi-tools, libgpiod(+tools), linux-tools-iio, v4l2grab, evtest,
 fb-test-app, mtd (+UBI tools).
@@ -460,7 +461,7 @@ fb-test-app, mtd (+UBI tools).
 
 | Group | Packages (size) |
 |---|---|
-| systemd/misc | systemd-hwdb (13.0), vim+runtime (13.3), kbd (2.0), bash-completion (0.8), htop, neofetch, tree, lua, cjson |
+| systemd/misc | systemd-hwdb (13.0), vim+runtime (13.3), **file (8.3 — `/usr/share/misc/magic.mgc`, only rpm selects it)**, kbd (2.0, but see 3.2: systemd pulls it back for the vconsole keymap), bash-completion (0.8), htop, neofetch, tree (busybox applet symlink remains), lua, cjson |
 | Python | python3 (17.7), pip (5.5), setuptools (4.1), cryptography (3.3), can (0.9), cffi+pycparser (1.1), canopen, ipy, serial-asyncio, smbus-cffi, spidev, mpio, python-cryptoauthlib, sqlite (1.2) |
 | Dev/bench | gdb+gdb-server+gdb-debugger (6.2), lmbench (2.0), trace-cmd (0.7), coremark, dhrystone, whetstone |
 | Curiosity glue | cryptoauthlib (+curiosity flag), p11-kit (2.3), libp11, gnutls+tools (2.1, drags libunistring 1.7, nettle, libgcrypt 1.1), wilcmchp_firmware (0.7), dt-overlay-mchp (+FIT) |
@@ -580,8 +581,7 @@ configuration (SD rootfs + NAND `/data`), record findings in this file.
 
 ## 10. Stage 3 — hardening / later
 
-* **Remaining trim candidates (measured, not yet done — ≈ 15 MiB):**
-  `file` 8.3 MiB (`/usr/share/misc/magic.mgc`, only a debugging aid),
+* **Remaining trim candidates (measured, not yet done — ≈ 7 MiB):**
   `kbd` + keymaps + consolefonts ≈ 5 MiB (the board has no display: setting
   `BR2_PACKAGE_SYSTEMD_VCONSOLE_DEFAULT_KEYMAP=""` drops the whole chain),
   `libstdc++` 1.8 MiB + gdb.py (nothing is C++; `BR2_TOOLCHAIN_BUILDROOT_CXX` off).

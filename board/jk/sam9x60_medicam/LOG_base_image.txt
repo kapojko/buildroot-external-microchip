@@ -205,7 +205,8 @@ Conventions
         session remain.
 --------------------------------------------------------------------------------
 7.1 [x] defconfig: package manifest per PLAN 7.3
-        dropped: python3 stack, gdb/lmbench/coremark/dhrystone/whetstone/trace-cmd,
+        dropped: file (8.3 MiB magic database, dropped after 7.11), python3 stack,
+        gdb/lmbench/coremark/dhrystone/whetstone/trace-cmd,
         vim/bash-completion/htop/neofetch/tree/lua/cjson, gnutls/p11-kit/libp11,
         cryptoauthlib(+python), bluez5(+subopts), hostapd(+eap/wps), dhcp/dhcpcd/
         dhcp-server/relay/radvd/ifupdown,nftables/iptables, nfs-utils, rng-tools,
@@ -259,13 +260,14 @@ Conventions
          build is the one that counts, hence 'make clean' above.)
         cd ~/src/buildroot-mchp && make clean && make -j$(nproc)
         result (all values measured, not estimated):
-          output/target       63 MiB          (plan estimated 110-115)
-          rootfs.tar          61 MiB, 2901 files / 3929 tar entries (was 11541)
+          output/target       55 MiB          (63 MiB before 'file' was dropped;
+                                               plan estimated 110-115)
+          rootfs.tar          52 MiB, 3923 tar entries (was 11541)
           rootfs.ext2         256 MiB nominal
           sdcard.img          273 MiB         (1 MiB offset + 16 MiB vfat + 256 MiB ext4)
           boot.vfat           16 MiB : zImage 5603944 B + u-boot.bin 458952 B + dtb + boot.bin + env
           installed packages  276 BR2_PACKAGE_*=y, 136 package build dirs
-          top sizes           systemd 10.5, file 8.3, openssh 5.8, libopenssl 4.2,
+          top sizes           systemd 10.5, openssh 5.8, libopenssl 4.2,
                               util-linux 3.6, linux-modules 3.2, glibc 2.1, kbd 2.0,
                               libstdc++ 1.8, tzdata 1.7, iproute2 1.7 MiB
         verified in the image:
@@ -285,6 +287,19 @@ Conventions
             the next clean build via BR2_PACKAGE_SYSTEMD_VCONSOLE_DEFAULT_KEYMAP="".
           - spi-tools 1.0.2 ships spi-config + spi-pipe only (no spi_xfer/spidev_test);
             LOG 5.4 corrected for the board tests.
+7.11c [x] follow-up trim: `file` package dropped (a284c57) - 63 -> 55 MiB
+        this one did NOT need a full rebuild, because dropping a package does not
+        invalidate any other package and the toolchain is untouched:
+          make BR2_EXTERNAL=../buildroot-external-microchip sam9x60_medicam_defconfig
+          rm -f <the 11 files owned by 'file' in output/target>   # F22 workaround
+          rm -f output/images/{rootfs.ext2,rootfs.tar,sdcard.img,boot.vfat}
+          make -j$(nproc)          # 24 s: target-finalize + ext2/tar + genimage
+        verified: no /usr/bin/file, libmagic* or magic.mgc in rootfs.tar;
+        /home -> data/home and the two enabled units still in the image;
+        no makedevs messages at all this time (the /home one is stat()-based:
+        it disappears as soon as /data/home exists when makedevs runs).
+        a toolchain-option change (e.g. BR2_TOOLCHAIN_BUILDROOT_CXX off) is the
+        exception: that still needs make clean && make.
 7.11a [x] defconfig validated WITHOUT a build (kconfig only, ~40 s)
         (kept for reference: 276 BR2_PACKAGE_*=y, all planned KEEP =y, all DROP absent,
         DBUS=y is selected by systemd and is expected)
@@ -339,7 +354,7 @@ Conventions
 10.3 [ ] keep the historical "Buildroot BSP MediCam.md" as-is or fold it into this log?
 10.4 [ ] /home: keep the symlink (one harmless makedevs/tmpfiles message) or bind-mount
           /data/home onto a real /home with a home.mount unit at stage 1.5?
-10.5 [ ] batch these trims into the stage 1.5 clean rebuild (~15 MiB): drop `file`
-          (8.3 MiB, debugging aid only), set BR2_PACKAGE_SYSTEMD_VCONSOLE_DEFAULT_KEYMAP=""
+10.5 [ ] batch these trims into the stage 1.5 clean rebuild (~7 MiB): set
+          BR2_PACKAGE_SYSTEMD_VCONSOLE_DEFAULT_KEYMAP=""
           (drops kbd + keymaps + consolefonts, ~5 MiB, the board has no display), and turn
           BR2_TOOLCHAIN_BUILDROOT_CXX off (libstdc++ 1.8 MiB, nothing is C++).
