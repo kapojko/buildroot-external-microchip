@@ -2,16 +2,25 @@
 # SPDX-License-Identifier: GPL-2.0
 #
 # make_clean_no_host.sh — clean a buildroot output tree WITHOUT touching the
-# host directory, so the cross toolchain and host tools are NOT recompiled.
+# host toolchain/tools, so they are NOT recompiled.
 #
 # Why this exists (PLAN F22 + R1):
-#   * Buildroot has no "dirclean" target (that is a Yocto/OpenEmbedded thing).
-#   * `make clean` deletes output/host (verified: buildroot Makefile clean: ->
-#     rm -rf ... $(HOST_DIR) ...), forcing a ~30-50% host rebuild on the next
+#   * Buildroot has no "dirclean" target (that is a Yocto/OpenEmbedding thing).
+#   * `make clean` deletes output/host AND all of output/build — including the
+#     host packages' stamp files — forcing a ~30-50% host rebuild on the next
 #     `make`.
-#   * A plain rm of the package/target/images dirs achieves the same "clean"
-#     result for F22 (stale files left in output/target by disabled packages)
-#     while keeping output/host and dl/ intact.
+#   * Buildroot decides whether to (re)build a package from the stamp files in
+#     output/build/<pkg>/ (.stamp_configured, .stamp_built, .stamp_host_installed,
+#     ...). An intact output/host is NOT enough: remove the stamps and every
+#     host package is recompiled and reinstalled anyway.
+#
+# What this script does:
+#   * removes the TARGET-package build dirs (forcing their reinstall into a
+#     fresh output/target — the F22 "stale files from dropped packages" fix);
+#   * keeps every host-* build dir (and its stamps), so host packages are NOT
+#     rebuilt;
+#   * removes output/target, output/images, output/staging, etc. (regenerated).
+#   * keeps output/host, .config and dl/.
 #
 # When is a clean needed at all?
 #   * Only when the PACKAGE SET changes (F22). Toggling between the SD and NAND
@@ -35,11 +44,24 @@ O_DIR=${2:-"$BR_DIR/output"}
 
 cd "$BR_DIR"
 
-# Remove everything `make clean` removes, EXCEPT host/ (and .config + dl/).
-rm -rf "$O_DIR/build" \
-       "$O_DIR/target" \
-       "$O_DIR/staging" \
+# Remove TARGET-package build dirs (with their stamps -> they reinstall).
+# Keep host-* dirs: their stamps stop buildroot recompiling the host.
+if [ -d "$O_DIR/build" ]; then
+    for d in "$O_DIR"/build/*/; do
+        [ -d "$d" ] || continue
+        name=${d%/}; name=${name##*/}
+        case "$name" in
+            host-*) continue ;;
+        esac
+        rm -rf "$d"
+    done
+fi
+
+# Remove the assembled rootfs/images/staging (regenerated on the next make),
+# but keep host/, .config and dl/.
+rm -rf "$O_DIR/target" \
        "$O_DIR/images" \
+       "$O_DIR/staging" \
        "$O_DIR/legal-info" \
        "$O_DIR/graphs" \
        "$O_DIR/per-package" \

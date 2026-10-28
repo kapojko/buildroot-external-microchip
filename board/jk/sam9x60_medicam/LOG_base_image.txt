@@ -520,14 +520,29 @@ Conventions
 9.8 [x] TWO-BUILD WORKFLOW decided: SD defconfig (output/, in-tree) + NAND
         defconfig (output-nand/, O=). NAND tree shares the host via symlink
         output-nand/host -> output/host (paths baked into the toolchain stay
-        valid; no recompile). make_clean_no_host.sh cleans build/target/images
-        WITHOUT host (buildroot has no dirclean; make clean rm -rf's HOST_DIR).
+        valid). make_clean_no_host.sh cleans build/target/images WITHOUT host
+        (buildroot has no dirclean; make clean rm -rf's HOST_DIR).
+        FIXED on first build (see 9.11): the initial version removed ALL of
+        output/build, including host-* stamps -> buildroot recompiled the whole
+        host on the next make. Correct granularity: remove only non-host-*
+        dirs under output/build (their .stamp_* gate the rebuild).
         Toggling SD<->NAND defconfigs needs NO clean (same package set).
-9.9 [ ] BUILD PENDING (user runs, chained && sequentially - shared host must not
-        be built in parallel): SD tree make_clean_no_host.sh + make, then
-        NAND tree make O=output-nand ... + make. Then make-rescue-sd.sh, then
-        BOARD SESSION 3.
-9.10[ ] BOARD SESSION 3: SD boot (rescue card) -> /boot/flash-nand.sh -> power
+9.9 [x] FIRST BUILD (2026-10-28, chained &&): SD build OK (trim applied;
+        host recompiled once due to the 9.8 stamp bug - one-time waste).
+        NAND build FAILED at target-post-image / genimage: "size of partitions
+        (1073741824) exceeds flash size (1063256064)" - genimage-nand.cfg
+        numpebs was set to the UBI-region count (4056); genimage sizes the raw
+        image from numpebs*pebsize and the ubi partition ends at the die end
+        (0x40000000), so it must be the WHOLE die (4096). Fixed in 9.11.
+        Everything before genimage succeeded: bootloaders built,
+        post-image-pre.sh copied boot.bin.pmecc + regenerated uboot-env.bin.
+9.10[ ] BUILD RE-RUN PENDING (NAND only; SD already good):
+        make O=output-nand -j$(nproc) 2>&1 | tee ~/src/build-nand.log
+9.11[x] FIXES after first build: make_clean_no_host.sh keeps host-* build dirs
+        (stamps); genimage-nand.cfg numpebs 4056 -> 4096 (whole die; 4 Gbit =
+        2048, README updated). flash-nand.sh rootfs EB count stays 4056 (UBI
+        region, distinct from genimage's whole-die numpebs).
+9.12[ ] BOARD SESSION 3: SD boot (rescue card) -> /boot/flash-nand.sh -> power
         off -> remove SD -> NAND boot; 10x reboot + 5x power cut; then SAM-BA
         recovery path (-b sam9x60d1g, no ::no_extram - F4).
 

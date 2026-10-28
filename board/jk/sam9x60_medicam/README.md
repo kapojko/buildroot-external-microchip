@@ -226,9 +226,10 @@ Changing the NAND density (2 / 4 / 8 Gbit)
   `0xa00000..0x40000000` = `0x3f600000`. For 4 Gbit change exactly three
   numbers:
   - DTS: `ubi@a00000` reg -> `<0xa00000 0x1f600000>` (ends at `0x20000000`);
-  - `genimage-nand.cfg`: `numpebs = 2024` and the `ubi` partition size ->
-    `0x1f600000`;
-  - `flash-nand.sh`: `rootfs|...|4056|ubi` -> `2024`.
+  - `genimage-nand.cfg`: flash `numpebs = 2048` (WHOLE 4 Gbit die; 4096 for the
+    8 Gbit test bed) and the `ubi` partition size -> `0x1f600000`;
+  - `flash-nand.sh`: `rootfs|...|4056|ubi` -> `2024` (the UBI-region PEB count
+    `0x1f600000 / 0x40000 = 2024`, distinct from genimage's whole-die numpebs).
 * **2 Gbit (e.g. MT29F2G08ABAEAWP): a geometry change, not a size change.**
   Measured from the datasheet: 2,112-byte page (2,048 + 64), 128 KiB block -
   i.e. 2 KiB page / 64 B OOB / 128 KiB block. That invalidates the whole
