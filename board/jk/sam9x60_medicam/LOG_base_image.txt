@@ -88,6 +88,8 @@ Conventions
          check: grep BR2_EXTERNAL_MCHP_PATH .config)
 
 3.2 [ ] current command (12 cores / 15 GiB WSL as measured)
+        (BR2_EXTERNAL is only needed for the defconfig selection; the resulting
+         .config keeps it on its own)
         cd ~/src/buildroot-mchp
         make BR2_EXTERNAL=../buildroot-external-microchip sam9x60_medicam_defconfig
         make BR2_EXTERNAL=../buildroot-external-microchip -j$(nproc) 2>&1 | tee ~/src/build-stage1.log
@@ -168,18 +170,18 @@ Conventions
               NOT in the trimmed image; only v4l2grab is kept (stage 1 decision).
 
 --------------------------------------------------------------------------------
-6. STAGE 0 - WORKSPACE HYGIENE                                  [ ] in progress
+6. STAGE 0 - WORKSPACE HYGIENE                                  [x] done
 --------------------------------------------------------------------------------
 6.1 [x] Windows checkout: branch medicam_clean @ a02b79a, tree clean, == origin/medicam_clean
         git rev-parse HEAD
-6.2 [ ] WSL checkout reset (was: local branch named 'origin/medicam' @ b5443b5 = medicam_nand)
+6.2 [x] WSL checkout reset (was: local branch named 'origin/medicam' @ b5443b5 = medicam_nand)
         cd ~/src/buildroot-external-microchip
         git fetch --all --prune          # or: git fetch local
         git checkout -B medicam_clean origin/medicam_clean
         git branch -D 'origin/medicam'   # remove the name that shadows the remote-tracking ref
         git rev-parse HEAD               # must equal the Windows HEAD (a02b79a...)
         git status --porcelain           # empty
-6.3 [ ] port .gitattributes from medicam_nand, commit separately
+6.3 [x] port .gitattributes from medicam_nand (+ overlay text patterns), commit
         git show medicam_nand:.gitattributes > .gitattributes
         git add .gitattributes && git commit -m "build: pin LF endings and +x for scripts/fragments"
         git ls-files -s -- '*.sh' | awk '$1=="100644"{print "not exec:",$4}'   # empty
@@ -188,40 +190,76 @@ Conventions
         tr -cd '\r' < board/microchip/at91/post_build.sh | wc -c   -> 17
         (the 17 are checkout CRLF only, from core.autocrlf=true; the index blob has 0)
         keep auditing files created later: git grep -Il -F -e $'\r' -- <new paths>
-6.5 [ ] do NOT merge medicam_nand; only these files are ported later, after review:
+6.5 [x] do NOT merge medicam_nand; only these files are ported later, after review:
         at91bootstrap_nand.fragment, uboot-nand.fragment, uboot-env-nand.txt,
         genimage-nand.cfg, post-image-pre.sh, flash-nand.sh, README_Medicam.md
 
   exit: both checkouts on medicam_clean, same commit, clean tree, .gitattributes in place.
 
 --------------------------------------------------------------------------------
-7. STAGE 1 - LEAN SD IMAGE                                      [ ] not started
+7. STAGE 1 - LEAN SD IMAGE                                      [ ] build + verify pending
+  NOTE: 7.1-7.10 are implemented on branch medicam_clean (commits up to
+        'docs: log the implemented stage 1'); only the build and the board
+        session remain.
 --------------------------------------------------------------------------------
-7.1 [ ] defconfig: package manifest per PLAN 7.3 (drop python/vim/gdb/curiosity glue/wifi-AP/BT)
-7.2 [ ] defconfig: BR2_TARGET_ROOTFS_EXT2_SIZE="256M"
-        disable BR2_PACKAGE_SYSTEMD_HWDB, BR2_PACKAGE_DT_OVERLAY_MCHP (+FIT), keep tzdata/UTC
-7.3 [ ] defconfig: BR2_ROOTFS_OVERLAY += board/jk/sam9x60_medicam/fs-overlay/
-7.4 [ ] overlay: etc/ssh/sshd_config (+Include, PermitRootLogin yes, PasswordAuthentication yes),
-        etc/systemd/system/multi-user.target.wants/sshd.service symlink, etc/motd,
-        etc/systemd/journald.conf (Storage=volatile), data/, home -> data/home
-7.5 [ ] overlay: usr/local/sbin/medicam-hostname.sh + medicam-hostname.service
-        (oneshot, After=local-fs.target, Before=systemd-networkd.service,
-         medicam-<6 hex of eth0 MAC>, fallback = 6 chars of /etc/machine-id)
-        verify on target: hostname; cat /etc/hostname; ip -4 addr show eth0
-7.6 [ ] defconfig: root password hash, '$' doubled
-        HASH=$(openssl passwd -6 -salt medicam <password>); echo "$HASH" | sed 's/\$/$$/g'
+7.1 [x] defconfig: package manifest per PLAN 7.3
+        dropped: python3 stack, gdb/lmbench/coremark/dhrystone/whetstone/trace-cmd,
+        vim/bash-completion/htop/neofetch/tree/lua/cjson, gnutls/p11-kit/libp11,
+        cryptoauthlib(+python), bluez5(+subopts), hostapd(+eap/wps), dhcp/dhcpcd/
+        dhcp-server/relay/radvd/ifupdown,nftables/iptables, nfs-utils, rng-tools,
+        setserial, bridge-utils/can-utils/net-tools/iperf3/mii-diag/phy-tool/
+        traceroute/lrzsz, wireless-tools/crda, mpg123, dosfstools, dt-overlay-mchp(+FIT),
+        wilcmchp_firmware, host-gdb
+        added: UTIL_LINUX_RFKILL, KMOD(+TOOLS), LINUX_FIRMWARE+RALINK_RT2XX,
+        WIRELESS_REGDB, explicit MTD tool set (mtdinfo, nanddump, nandwrite, ubiattach,
+        ubidetach, ubiformat, ubihealthd, ubimkvol, ubiinfo, ubirename, ubirmvol,
+        ubirsvol, ubiupdatevol, ubiblock)
+7.2 [x] defconfig: BR2_TARGET_ROOTFS_EXT2_SIZE="256M";
+        BR2_PACKAGE_SYSTEMD_HWDB off; DT_OVERLAY_MCHP + host FIT support off;
+        timezone left at the defaults (TZ info on, BR2_TARGET_LOCALTIME=Etc/UTC)
+7.3 [x] defconfig: BR2_ROOTFS_OVERLAY += board/jk/sam9x60_medicam/fs-overlay/,
+        BR2_ROOTFS_POST_BUILD_SCRIPT += board/jk/sam9x60_medicam/post-build.sh
+7.4 [x] overlay: etc/ssh/sshd_config (Include + PermitRootLogin yes +
+        PasswordAuthentication yes, keeps AuthorizedKeysFile and the sftp Subsystem),
+        etc/ssh/sshd_config.d/, etc/motd, etc/systemd/journald.conf.d/10-medicam.conf
+        (Storage=volatile, RuntimeMaxUse=8M), data/
+        unit enablement: usr/lib/systemd/system-preset/85-medicam.preset
+        (enable sshd.service, enable medicam-hostname.service) - a wants-symlink cannot be
+        committed from the Windows checkout (core.symlinks=false); preset-all runs after
+        the overlays.
+        /home -> data/home is NOT an overlay entry: post-build.sh does it, because the
+        target already has /home and the overlay is copied with "rsync -a --ignore-times".
+7.5 [x] overlay: usr/local/sbin/medicam-hostname.sh + etc/systemd/system/medicam-hostname.service
+        (oneshot, RemainAfterExit, After=local-fs.target, Before=systemd-networkd.service,
+        medicam-<last 6 hex of the eth0 MAC>, fallback first 6 hex of /etc/machine-id,
+        also rewrites the 127.0.1.1 line in /etc/hosts)
+        verify on target: hostname; cat /etc/hostname; hostnamectl; ip -4 addr show eth0
+7.6 [x] defconfig: root password (current value "1", salted SHA-512), '$' doubled
+        HASH=$(openssl passwd -6 -salt medicam 1)
         BR2_TARGET_ENABLE_ROOT_LOGIN=y
-        BR2_TARGET_GENERIC_ROOT_PASSWD="<doubled hash>"
-        verify on target: getent shadow root | cut -d: -f2   -> starts with $6$
-                          and login on the serial console asks for a password
-7.7 [ ] kernel: strip the '+' prefixes from board/microchip/sam9x60/at91_dt.fragment
-        before/after: grep -E 'OVERLAY_FS|NAMESPACES|EXT4_FS_POSIX_ACL' output/build/linux-custom/.config
-        expect: =y after the fix (was "is not set")
-7.8 [ ] dts: add &trng { status = "okay"; };  (see F9, needed by ssh-keygen -A)
-        verify: dmesg | grep -i trng ; cat /sys/class/misc/hwrng/dev
-7.9 [ ] build: guard board/microchip/at91/post_build.sh (existence checks around dhcpd/wpa_supplicant)
-7.10 [ ] defconfig additions: UTIL_LINUX_RFKILL, LINUX_FIRMWARE + RALINK_RT2XX (WGET already set)
-7.11 [ ] build  -> USER runs the command from 3.2, pastes the tail / log name
+        BR2_TARGET_GENERIC_ROOT_PASSWD="$$6$$medicam$$..."   (each '$' doubled!)
+        verify on target: getent shadow root | cut -d: -f2    -> starts with $6$
+                          serial login asks for the password
+        to change it, or for the per-device rotation: see README.md in this directory
+7.7 [x] kernel fragment repaired (board/microchip/sam9x60/at91_dt.fragment)
+        '+' prefixes removed, netfilter line dropped (F10), USB_G_WEBCAM dropped
+        check after the build:
+          grep -E 'OVERLAY_FS|NAMESPACES|EXT4_FS_POSIX_ACL|SYN_COOKIES|USB_CONFIGFS_ECM' \
+               output/build/linux-custom/.config      -> expect =y for all
+7.8 [x] dts: &trng { status = "okay"; }
+        verify: dmesg | grep -i trng
+7.9 [x] board/microchip/at91/post_build.sh: existence check around the dhcpd.service move,
+        rm -f for the unit symlinks (a trimmed package set no longer breaks the build)
+7.10 [x] defconfig cross-check: 276 BR2_PACKAGE_*=y (baseline before trim: 430)
+7.11 [ ] build -> USER runs the command from 3.2, pastes the tail of the log
+7.11a [x] defconfig validated WITHOUT a build (kconfig only, ~40 s)
+        make BR2_EXTERNAL=/home/yury/src/buildroot-external-microchip sam9x60_medicam_defconfig
+        -> no warnings; every planned KEEP symbol =y; every planned DROP symbol absent;
+           BR2_TARGET_ROOTFS_EXT2_SIZE="256M"; root password hash present
+        -> BR2_PACKAGE_DBUS=y stays on purpose: package/systemd/Config.in selects it
+           (systemd needs the message bus at runtime), not a trim leftover
+        -> after this the buildroot tree holds a medicam_clean .config; a plain `make`
+           (no BR2_EXTERNAL needed) builds the same configuration
 7.12 [ ] BOARD SESSION 1 (no SD in the card reader of the PC, card written from output/images/sdcard.img)
         - serial login asks for the root password                        [ ]
         - ssh root@medicam-xxxxxx with the password                      [ ]
@@ -235,6 +273,11 @@ Conventions
         - lsusb ; mount a USB stick                                      [ ]
         - ldc / v4l2grab to /data (sanity, camera untouched)             [ ]
         record the numbers into 3.4 and into PLAN section 3.2
+        kconfig check already done (see 7.11a):
+          make BR2_EXTERNAL=/home/yury/src/buildroot-external-microchip sam9x60_medicam_defconfig
+          -> no warnings, .config has 276 BR2_PACKAGE_*=y (baseline before trim: 430)
+          -> every planned KEEP symbol is =y, every planned DROP symbol is absent
+          -> BR2_TARGET_ROOTFS_EXT2_SIZE="256M", root password hash present
   exit: PLAN 7.4 criteria 1-6 met, measurements recorded.
 
 --------------------------------------------------------------------------------

@@ -284,18 +284,18 @@ more than one board on a LAN. → unique hostname per board at first boot
 would silently build the wrong tree. → **stage 0**.
 
 **F18 — CRLF / exec-bit hazard (measured, not assumed).** The Windows checkout
-uses `core.autocrlf=true`, so the *working tree* there is CRLF while the *blobs*
-are LF. Measured: `git grep -Il -F -e $'' HEAD -- .` → **0 files**, i.e. the
-repository content is LF-clean and no renormalisation is needed; the CRLF seen in
-`at91-sam9x60_medicam.dts`, `genimage.cfg`, `uboot-env.txt`,
-`board/microchip/sam9x60/at91_dt.fragment` and `board/microchip/at91/post_build.sh`
-is checkout-only (`tr -cd '' < file | wc -c` → 543/17/25 on the Windows tree,
-0 in the index). The real hazards are therefore (a) files **created** on the
-Windows side with a tool that bypasses git's filters, and (b) **lost +x bits**.
-`medicam` has no `.gitattributes`; `medicam_nand` added one pinning `*.sh` (+x),
-`*.dts`, `*.fragment`, `*_defconfig` to LF. Port it in **stage 0** (extended to the
-`*.service`/`*.mount`/`*.preset`/`*.cfg` files stage 1 adds) and keep the audit
-`git ls-files -s -- '*.sh' | awk '$1=="100644"{print "not exec:",$4}'` empty.
+uses `core.autocrlf=true`, so its *working tree* is CRLF while the *blobs* are LF;
+the build host sees LF, so nothing is broken today. Measured over all tracked
+files (`git cat-file blob HEAD:<f>`, counting CR bytes in Python; the shell
+CR idiom is mangled by git-bash and yields false results): only the two PNGs (binary, expected)
+and this plan file (2 stray CRs, fixed) contain CR bytes. So the real hazards are
+(a) files created on the Windows side without a matching `.gitattributes` rule
+(e.g. overlay `motd`/`sshd_config`, which have no extension) and (b) **lost exec
+bits** — Windows has `core.fileMode=false` and the `executable` gitattribute is
+informative only, so a new `*.sh` must be added with
+`git update-index --chmod=+x <path>`. `medicam_nand`'s `.gitattributes` is ported
+in **stage 0** (extended with the overlay text patterns); audit
+`git ls-files -s -- '*.sh' | grep '^100644'` must stay empty for our scripts.
 
 **F19 — U-Boot/partition margin is thin.** `u-boot.bin` is 580 184 B in a 768 KiB
 partition; `zImage` is 5.6 MiB. The `medicam` DTS allots only 6 MiB to the kernel
@@ -391,26 +391,38 @@ dts: enable TRNG on sam9x60_medicam
 build: make at91 post-build script tolerant of dropped packages
 ```
 
-### 7.2 Overlay layout (target)
+### 7.2 Overlay layout (as implemented)
 
 ```
-board/jk/sam9x60_medicam/fs-overlay/
-├── data/                                  # mount point for the NAND volume (stage 1: plain dir)
-├── home -> data/home                      # symlink
-├── etc/motd
-├── etc/ssh/sshd_config
-├── etc/systemd/journald.conf
-├── etc/systemd/system/medicam-hostname.service
-├── etc/systemd/system/multi-user.target.wants/sshd.service -> /usr/lib/systemd/system/sshd.service
-└── usr/local/sbin/medicam-hostname.sh
+board/jk/sam9x60_medicam/
+├── post-build.sh                          # /home -> data/home + /data/home (see below)
+└── fs-overlay/
+    ├── data/                              # stage 1: plain dir; stage 1.5: mount point
+    ├── etc/motd
+    ├── etc/ssh/sshd_config                # Include sshd_config.d/*.conf, PermitRootLogin yes
+    ├── etc/ssh/sshd_config.d/             # left for the desktop script
+    ├── etc/systemd/journald.conf.d/10-medicam.conf   # Storage=volatile, RuntimeMaxUse=8M
+    ├── etc/systemd/system/medicam-hostname.service
+    ├── usr/lib/systemd/system-preset/85-medicam.preset
+    └── usr/local/sbin/medicam-hostname.sh
 ```
 
-Enablement rule: Buildroot cannot run `systemctl enable` in a chroot, so units are
-enabled by shipping the `multi-user.target.wants/` symlink (deterministic) — or,
-equivalently, by a preset file at
-`usr/lib/systemd/system-preset/85-medicam.preset` (`enable sshd.service`), since
-`systemctl --root=$(TARGET_DIR) preset-all` runs as a rootfs pre-command hook,
-i.e. **after** overlays are copied. Symlinks are preferred.
+Two deviations from the "symlinks are preferred" rule, both forced by the Windows
+checkout (`core.symlinks=false` — a committed symlink becomes a plain file there):
+
+* **Unit enablement via preset** `85-medicam.preset`
+  (`enable sshd.service`, `enable medicam-hostname.service`). Buildroot runs
+  `systemctl --root=$(TARGET_DIR) preset-all` as a rootfs *pre-command* hook, i.e.
+  after the overlays are copied, so the preset is equivalent to the
+  `multi-user.target.wants/` symlink but survives git on any host.
+* **`/home -> data/home` via `post-build.sh`**, not as an overlay entry: the
+  target already has an empty `/home` directory and the overlay is copied with
+  `rsync -a --ignore-times`, which cannot replace a directory with a symlink.
+  Post-build scripts run after the overlay copy.
+
+Drop-ins instead of whole-file replacement where systemd/sshd support them
+(`journald.conf.d`, `sshd_config.d`): our settings survive package updates.
+`sshd_config` itself is replaced because the stock file has no `Include` line.
 
 ### 7.3 Package manifest
 
