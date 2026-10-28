@@ -1,10 +1,12 @@
 # MediCam base image — implementation plan
 
-Status: **stage 0 and stage 1 done and verified on hardware (2026-10-28). Stage 1.5
-implemented (chip decision, layout freeze, `/data` infra) — board session 2
-(clean build + `/data` on NAND verify) pending.** Work happens session by session
-on branch `medicam_clean` (created from `medicam`); see the working rules in
-section 0 and the measured log in LOG_base_image.txt.
+Status: **stage 0, stage 1, stage 1.5 and stage 2 done and verified on hardware
+(2026-10-28): the board boots from NAND with no SD card, `/` on UBIFS and `/data`
+on a second UBI volume.** Open: the 10x reboot / 5x power-cut matrix (stage 2
+run-off) and the ~30 s ROM boot-sequence delay without an SD card (F26, accepted
+for now). Work happens session by session on branch `medicam_clean` (created from
+`medicam`); see the working rules in section 0 and the measured log in
+LOG_base_image.txt.
 
 Board: SAM9X60D1G SiP (DDR2 128 MiB in package), 128 MiB RAM, MT29F8G08ABACAWP
 parallel NAND (1 GiB), OV2640 camera on ISI, 24C256 EEPROM @0x50 on I2C0,
@@ -379,6 +381,53 @@ Ethernet + DHCP.
 SAM-BA is slow; prefer the SD rescue path (`nandwrite` for the raw boot
 partitions + `ubiformat`/`ubiupdatevol` for the rootfs volume).
 
+**F27 — NAND control lines have no external pull resistors (netlist, verified).**
+Traced in `MediCam.SDF` (rev 1.0): `NAND_RDY_PD5` (NAND `R/B#`, U7.7 ↔ SoC
+PD5/K14), `NAND_RE_PD0`, `NAND_WE_PD1`, `NAND_ALE_PD2`, `NAND_CLE_PD3` connect the
+NAND directly to the SoC with no external resistor; `CE#` does have a 100 kΩ
+pull-up (R42) ahead of the 0 Ω link R43. Microchip's SAM9X60 schematic checklist
+documents the EBI/NAND control inputs as internally pulled-up (100 kΩ) to VDDIO at
+reset. Recorded as a design observation; it is not needed to explain F26.
+
+**F26 — delay before `RomBOOT` on a cold power-on (open, ROM-side).**
+Verified measurements (board, 2026-10-28):
+
+| Situation | Time to `RomBOOT` |
+|---|---|
+| cold power-on, **bootable** SD card (valid `boot.bin`) | immediate — ROM boots from SD |
+| cold power-on, **the same card formatted blank** (Windows format) | **~20 s** |
+| cold power-on, blank SD card or **no** SD card (measured earlier) | ~30 s |
+| **RESET** pressed at any moment, including during the wait | immediate |
+
+The same physical card gives immediate boot with valid content and ~20 s once
+formatted, so the trigger is **card content**, not card presence or loading: the
+delay appears only when the ROM finds no valid code on SD and has to fall back to
+NAND. That makes it ROM-side behaviour in the NAND-fallback path, not a
+power-rail/reset-release effect.
+
+What is still unknown: *why* that fallback path takes 20-30 s on a cold power-on.
+NAND readiness is not the answer — `tPOR`/`tVSL` are microseconds to milliseconds,
+the ROM only requires a ≤ 100 µs NAND reset time (§17.1.4.7.1), and a RESET press
+seconds after power-on boots from NAND immediately, i.e. the NAND is usable within
+seconds.
+
+Documented conflict, recorded rather than resolved: TB3380 ("Booting from NAND
+Flash on SAM9X60/SAM9X7", §4.5) states that if `RomBOOT` is not displayed the MPU
+is probably held in reset or the power sequencing is wrong, and that such an early
+failure "cannot be due to the booting process from the NAND Flash device". Our
+cold NAND-fallback case shows no `RomBOOT` for 20-30 s while the same hardware
+boots from NAND within seconds on a warm reset, so TB3380's generalisation does
+not describe this board's behaviour.
+
+Remaining measurements, in order, if this is picked up again:
+1. raw-byte capture of DBGU over the whole window (are bytes emitted at all?);
+2. timing repeated several cold boots (fixed value = timer, spread = retries);
+3. scope `NRST` + `PWRHLD` + NAND `VCC`/`R/B#` during a cold power-on with a
+   bootable card vs. without, to see when the SoC starts and when NAND is accessed.
+
+Nothing in Buildroot, AT91Bootstrap or U-Boot can influence this; **decision:
+accepted as-is for now** (costs only time-to-first-output).
+
 ---
 
 ## 5. Decisions (locked)
@@ -660,27 +709,28 @@ rewrite**.
 
 ---
 
-## 9. Stage 2 — NAND boot attempt (≈2–3 days, hardware-bound)
+## 9. Stage 2 — NAND boot (done; verified on hardware 2026-10-28)
 
 Precondition: stage 1 `mtdinfo` confirmed the geometry (F2) and the layout is
-frozen (8.2).
+frozen (8.2). All tasks below are implemented and exercised on the board; the
+measured evidence lives in LOG 9.12–9.15. Deviations from the original plan are
+marked **[as-built]**.
 
 | # | Task |
 |---|---|
-| 2.1 | `board/jk/sam9x60_medicam/at91bootstrap_nand.fragment`: `# CONFIG_PMECC_OOB_256 is not set` + `CONFIG_PMECC_OOB_224=y` (adjust to `mtdinfo`); rebuild, verify the regenerated `boot.bin.pmecc` header has `eccOffset = 120` (was 152) |
-| 2.2 | Port `uboot-nand.fragment`: `CONFIG_ENV_IS_IN_NAND`, `ENV_OFFSET=0x140000`, `ENV_OFFSET_REDUND=0x100000`, `ENV_SIZE=0x20000`, redundant env, compile-in fallback `BOOTARGS`/`BOOTCOMMAND` (`nand read` kernel + dtb, `bootz`) so a corrupt env still boots |
-| 2.3 | Port `uboot-env-nand.txt`: `bootargs=console=ttyS0,115200 earlyprintk ubi.mtd=<n> root=ubi0:rootfs rootfstype=ubifs rw rootwait cma=16m atmel.pm_modes=standby,ulp0`; `bootdelay=1`; bootcmd reads kernel/dtb from NAND |
-| 2.4 | UBIFS/UBI target options: `BR2_TARGET_ROOTFS_UBIFS` with LEB `0x3e000`, min-IO `0x1000`, subpage `0x200`; UBI `pebsize 0x40000`, `numpebs` = UBI MTD size / 256 KiB, volume name `rootfs` |
-| 2.5 | Port `genimage-nand.cfg` + `post-image-pre.sh` (regenerate `uboot-env.bin` from source, copy `*.bin.pmecc` → `boot.bin.pmecc`); sizes must match 8.2 |
-| 2.6 | Rewrite `flash-nand.sh` for the frozen layout: `nandwrite` per raw partition (bootstrap PMECC'd, u-boot, env ×2, dtb, kernel), then `ubiformat /dev/mtd<ubi>` + `ubiupdatevol /dev/ubi0_0` for the rootfs. **Never raw-`nandwrite` a UBI image into the UBI region.** |
-| 2.7 | Flashing paths: **A (primary)** boot SD → run `flash-nand.sh` → power off → remove SD → NAND boots. **B (recovery)** SAM-BA `-d sam9x60d1g` + `-a nandflash:1:8:0xc2605007` (no `::no_extram`), documented with the DDR2 explanation (F4) |
-| 2.8 | Boot with the SD card removed; validate, then repeat power-cut testing |
+| 2.1 | `at91bootstrap_nand.fragment`: `# CONFIG_PMECC_OOB_256 is not set` + `CONFIG_PMECC_OOB_224=y`; the regenerated `boot.bin.pmecc` carries `eccOffset = 120` (was 152) and `spareSize = 224` — verified by decoding the 208-byte header |
+| 2.2 | `uboot-nand.fragment`: `CONFIG_ENV_IS_IN_NAND`, `ENV_OFFSET=0x140000`, `ENV_OFFSET_REDUND=0x100000`, `ENV_SIZE=0x20000`, frozen fallback `BOOTARGS`/`BOOTCOMMAND`. **[as-built]** no `CONFIG_DEFAULT_DEVICE_TREE` override — there is no medicam DTS in the U-Boot tree, and the runtime DTB comes from NAND anyway |
+| 2.3 | `uboot-env-nand.txt`: frozen bootargs (`ubi.mtd=6 root=ubi0:rootfs`), no `mtdparts` on the cmdline (the DTS is the single source of truth), `bootcmd` reads kernel 8 MiB @0x200000 + dtb @0x180000 and `bootz` |
+| 2.4 | UBIFS/UBI target options: LEB `0x3e000`, min-IO `0x1000`, UBI PEB `0x40000`. **[as-built]** `UBI_SUBSIZE` stays 512 only because genimage/the fs target need the symbol; the *actual* flashing geometry is an empty `ubiformat` with kernel defaults (no `-s`, no `-O`) — the frozen sub-page 0x200 / VID 0x200 assumption is wrong for this chip: measured LEB 253952, VID offset 4096, data offset 8192 (LOG 9.13) |
+| 2.5 | `genimage-nand.cfg` + `post-image-pre.sh` (copies `*.bin.pmecc` → `boot.bin.pmecc`, regenerates `uboot-env.bin` from source with a version-robust `mkenvimage` lookup). **[as-built]** flash `numpebs = 4096` = the WHOLE die, not the UBI-region 4056: genimage sizes the raw image from `numpebs` and the ubi partition ends at the die end 0x40000000 (first build failed with “size of partitions … exceeds flash size”) |
+| 2.6 | `flash-nand.sh` — **[as-built]** the rootfs is NOT flashed with `ubiformat -f`: (a) `mkfs.ubifs` output is a multiple of the LEB, not the PEB; (b) on a bare image `ubiformat` takes the `novtbl` path and creates NO volume table, so `root=ubi0:rootfs` would find nothing; (c) `rootfs.ubi` (ubinize) sets `vol_flags=autoresize`, which would swallow the rest of the die and leave nothing for `/data`. Correct flow: `flash_erase` → `ubiformat -y` (empty, kernel geometry) → `ubiattach -m6` → `ubimkvol -N rootfs -S 1238` (~300 MiB) → `ubiupdatevol`. Raw partitions stay `nandwrite -p` (no `-n`: the `.pmecc` file is a 208-byte header + raw code with no embedded ECC). Also: `/dev/mtd0` is a **char** device (test with `[ -c ]`, not `[ -b ]`); `ubidetach -m6` before touching the UBI region (SD boots have ubi0 attached for `/data`); auto-mount the payload FAT at `/boot` |
+| 2.7 | Flashing paths: **A (primary)** rescue SD → `flash-nand.sh` → power off → remove SD → NAND boots. **[as-built]** the rescue card is assembled by `make-rescue-sd.sh` from BOTH builds (NAND build's `sdcard.img` + SD-variant `boot.bin`/`u-boot.bin` **and the SD env as `uboot.env`** + NAND `u-boot-nand.bin` + `flash-nand.sh`); shipping the NAND env as `uboot.env` made the card unbootable (bad CRC → curiosity DTB). **B (recovery)** SAM-BA `-b sam9x60d1g` + `-a nandflash:1:8:0xc2605007`, no `::no_extram` (F4) |
+| 2.8 | **[x]** Boots with the SD card removed: `RomBOOT → AT91Bootstrap 4.0.11 → U-Boot 2024.07 → kernel 6.12.22 → systemd 256`, `/` on `ubi0:rootfs`, `/data` on `ubi0:data`, identity preserved. **[ ]** the 10× reboot / 5× power-cut matrix is still outstanding (LOG 9.15) |
 
 **Exit criteria:** `RomBOOT → AT91Bootstrap 4.0.11 → U-Boot → kernel → systemd`
-with no SD card; SSH reachable; `/data` mounted; 10 × reboot and 5 × hard
-power-cut without corruption.
-**On failure:** capture the DBGU log, keep stage 1.5 as the shipping
-configuration (SD rootfs + NAND `/data`), record findings in this file.
+with no SD card ✔; SSH reachable ✔ (direct switch; the Wi-Fi bridge drops the
+board's RX); `/data` mounted ✔; **10 × reboot and 5 × hard power-cut — pending.**
+Known behaviour: ~30 s delay before `RomBOOT` when no SD card is inserted (F26).
 
 ---
 

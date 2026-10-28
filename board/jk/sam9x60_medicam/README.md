@@ -70,12 +70,86 @@ One harmless message is expected during image creation:
 `/home -> data/home` symlink (exit code stays 0, the symlink survives). The
 runtime counterpart of that rule is masked by `fs-overlay/etc/tmpfiles.d/home.conf`.
 
-Boot chain (SD card, stage 1)
------------------------------
-RomBOOT -> AT91Bootstrap 4.0.11 (sam9x60_curiositysd_uboot) -> U-Boot
-(sam9x60_curiosity_mmc) -> zImage + at91-sam9x60_medicam.dtb from the FAT
-partition (bootz). The bootloaders are the curiosity ones on purpose: same SiP,
-same DDR2, same SDMMC0 wiring.
+Boot chain and ROM behaviour
+----------------------------
+Two boot chains, one per defconfig (they differ only in the first two stages):
+
+    SD card (stage 1):
+      RomBOOT -> AT91Bootstrap 4.0.11 (sam9x60_curiositysd_uboot)
+              -> U-Boot (sam9x60_curiosity_mmc), env in FAT: uboot.env
+              -> fatload zImage + at91-sam9x60_medicam.dtb -> bootz
+
+    NAND (stage 2):
+      RomBOOT -> AT91Bootstrap 4.0.11 (sam9x60_curiositynf_uboot, NAND presets)
+              -> U-Boot (sam9x60_curiosity_nandflash), env in NAND @0x140000
+              -> nand read zImage (8 MiB @0x200000) + dtb (@0x180000) -> bootz
+              -> root=ubi0:rootfs (UBIFS volume in the `ubi` MTD partition)
+
+The bootloaders are the curiosity ones on purpose: same SiP, same DDR2, same
+SDMMC0 padding. A `RomBOOT` line comes from the on-chip ROM, so it says nothing
+about the image; after it, every line is AT91Bootstrap or U-Boot.
+
+Decoding the AT91Bootstrap messages you will see on the DBGU (NAND build):
+
+    1-Wire: reset fail / No 1-Wire chip found / Using default information
+        The nf_uboot preset looks for a 1-Wire board-info EEPROM. This board has
+        none (its identity lives in the 24C256 on I2C0, handled by Linux), so it
+        falls back to defaults. Harmless: board sn 0x11600000, rev 0x0.
+    NAND: ONFI flash detected / Manufacturer 0x2c Chip 0xd3
+        0x2c = Micron; the MT29F8G08ABACAWP answers ONFI. Page 4096, spare 224.
+    NAND: Switch to timing mode 3 / Disable On-Die ECC
+        Timing mode 3 is the fastest ONFI timing the part supports; on-die ECC is
+        disabled because the SAM9X60 PMECC does the ECC work.
+    NAND: Initialize PMECC params, cap: 8, sector: 512
+        8-bit correction over 512-byte sectors - matches the --pmecc values that
+        the ROM read from the header at the start of the bootstrap page.
+    NAND: Image: Copy 0xc0000 bytes from 0x40000 to 0x23f00000
+        768 KiB of U-Boot read from the u-boot partition into DDR.
+
+ROM boot sequence (datasheet DS60001579 section 17.1.4) - relevant to any
+"why does it not boot instantly?" question:
+
+* With **no Boot Configuration Packet (BCP)** in OTP, the ROM tries, in order:
+  SDMMC0 -> SDMMC1 -> QSPI0 -> FLEXCOM0-SPI -> NAND Flash, then the SAM-BA
+  monitor. A BCP (OTP, one-time) can restrict/reorder this, set the console pin
+  and disable JTAG.
+* The NAND path sends a reset command and then reads the first page **without
+  ECC**. The first 208 bytes must be 52 copies of the same 32-bit PMECC header
+  word (`eccOffset`, `sectorSize`, `eccBitReq`, `spareSize`, `nbSectorPerPage`,
+  `usePmecc`, key 0xC); the ROM then re-reads with ECC and looks for the ARM
+  exception vectors + the download size in vector 6 (< 32 KiB). Because the ROM
+  decodes the page with the header the bootstrap carries, **the PMECC OOB size
+  in at91bootstrap_nand.fragment must match the real chip** (224 here, not the
+  curiosity preset's 256 - PLAN F2).
+* SAM-BA 3.9.1 ships a `bootconfig` applet for exactly this, e.g.
+  `sam-ba -p serial -d sam9x60d1g -a bootconfig -c readcfg:bcp-otp` or
+  `-c writecfg:bcp-otp:DBGU,NFC_IOSET1`. Its text grammar offers
+  `SDMMC0_IOSET1`, `QSPI0_IOSET1`, `FLEXCOMx_SPI_IOSETn`, `NFC_IOSET1` and the
+  console choice - but **no card-detect option**, even though the SDMMC second
+  word has an `ENABLE` bit plus PID/PIN for it. OTP is one-time programmable;
+  OTPC emulation mode (SRAM, survives a warm reset, lost at power-off) can
+  validate a packet before burning it.
+
+Observed cold-boot behaviour (PLAN F26 - open, not an image problem):
+
+* cold power-on with a **bootable** SD card: boots **immediately** (from SD);
+* cold power-on with **the same card formatted blank**: ~20 s before `RomBOOT`;
+* cold power-on with a blank card or **no** card: ~30 s before `RomBOOT`;
+* **RESET** pressed at any moment, including during that wait: boots immediately.
+
+Because the same physical card is immediate with valid content and slow once
+formatted, the trigger is the card's **content**: the delay appears only when the
+ROM finds no valid code on SD and falls back to NAND, i.e. it sits in the ROM's
+NAND-fallback path. The mechanism is unknown and NAND readiness is not it
+(`tPOR`/`tVSL` are microseconds-milliseconds, and a RESET a few seconds after
+power-on boots from NAND at once).
+
+Note the documented conflict: Microchip's TB3380 ("Booting from NAND Flash on
+SAM9X60/SAM9X7", §4.5) says that if `RomBOOT` is not displayed the MPU is
+probably held in reset / power sequencing is wrong. That does not describe this
+board - the same hardware boots from NAND within seconds on a warm reset while
+showing no `RomBOOT` for 20-30 s on a cold power-on with no valid SD code.
+Nothing in Buildroot, AT91Bootstrap or U-Boot can change this.
 
 Root password
 -------------
@@ -162,10 +236,37 @@ NAND variants). The **rescue card** is assembled from both builds:
     #  result = <nand_output>/images/sdcard-rescue.img
     #  needs  mtools on the host (sudo apt install mtools)
 
-Field flow: Etcher `sdcard-rescue.img` -> boot -> `/boot/flash-nand.sh` -> power
-off -> remove the SD card -> the board boots from NAND (no SD needed). The SD
-card is only a programming/rescue medium; the SD defconfig stays as the
-fallback shipping config and the everyday dev image.
+Field flow (verified on hardware 2026-10-28):
+
+    make-rescue-sd.sh                  # -> <nand_output>/images/sdcard-rescue.img
+    # Etcher that image on an SD card, insert, power on
+    /root/flash-nand.sh                # on the board (auto-mounts its own /boot)
+    #   bootstrap -> u-boot -> env x2 -> dtb -> kernel (nandwrite -p, ECC on the fly)
+    #   then rootfs: flash_erase -> ubiformat -y -> ubiattach -m6 ->
+    #                ubimkvol -N rootfs -S 1238 (~300 MiB) -> ubiupdatevol
+    power off, REMOVE the SD card, power on   # board boots from NAND
+
+The SD card is only a programming/rescue medium. Notes from the bring-up:
+* the rescue card **must** ship the SD environment as `uboot.env` (16 KiB) and
+  the NAND environment as `uboot-env.bin` (256 KiB) — with the NAND env in
+  `uboot.env` the SD U-Boot rejects it (bad CRC) and looks for the curiosity DTB;
+* the rootfs is a UBIFS **volume** created explicitly, not `ubiformat -f
+  rootfs.ubifs` (bare images get no volume table; `rootfs.ubi` would autoresize
+  over the whole die and leave nothing for `/data`);
+* factory bad blocks near the end of the die make the whole-chip erase report
+  EIO; `flash_erase` then erases per block and skips them — expected;
+* `/dev/mtd0` etc. are **char** devices.
+
+Measured on the board: `/` = `ubi0:rootfs` 1238 LEBs (299.8 MiB, 28 MiB used),
+`/data` = `ubi0:data` 2732 LEBs (661.6 MiB); PEB 256 KiB, LEB 253952, min-I/O
+4096, **no sub-pages** (VID header offset 4096, data offset 8192); good PEBs
+4052, bad 4, corrupted 0. Rootfs total is also physically smaller than stage 1
+because the rootfs is UBIFS-compressed (rootfs.ubifs 33 MiB).
+
+Known behaviour (PLAN F26): with **no SD card inserted** the ROM spends ~30 s on
+its default SDMMC attempts before falling through to NAND; with a card inserted
+it boots at once. Fixing it means programming a Boot Configuration Packet into
+one-time OTP (see PLAN F26 for the three options) — accepted as-is for now.
 
 Host / rebuild strategy
 -----------------------

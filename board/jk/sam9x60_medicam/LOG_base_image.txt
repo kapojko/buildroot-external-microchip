@@ -23,7 +23,9 @@ Conventions
             deb https://deb.debian.org/debian bookworm-updates main non-free-firmware
         - sudo apt update
 
-1.2 [ ] (current: WSL2 Debian) isolate the Linux PATH from the Windows PATH
+1.2 [x] (current: WSL2 Debian) isolate the Linux PATH from the Windows PATH
+        VERIFIED 2026-10-28: /etc/wsl.conf has [interop] appendWindowsPath = false,
+        printenv PATH | grep -c /mnt/c -> 0
         why: Windows PATH is appended to the WSL PATH (/mnt/c/WINDOWS/system32,
              .../Git/usr/bin, .../Go/bin ...), so Windows make/gcc/find/python shadow
              the Linux ones and the build fails in confusing ways.
@@ -36,7 +38,9 @@ Conventions
         verify: which make gcc python3                            -> /usr/bin/*
         note:   still reach the Windows tree via /mnt/d/Source/...
 
-1.3 [ ] apt packages
+1.3 [x] apt packages
+        VERIFIED 2026-10-28: make gcc g++ rsync bc cpio unzip wget git python3
+        mtools openssl all present (mtools added for make-rescue-sd.sh)
         sudo apt install -y git gitk meld which sed make binutils build-essential \
              diffutils gcc g++ bash patch gzip bzip2 perl tar cpio unzip rsync file \
              bc findutils libssl-dev libncurses-dev wget ca-certificates
@@ -47,7 +51,7 @@ Conventions
         git config --global user.name "Yuriy Kapoyko"
         git config --global user.email "yury.kapoyko@gmail.com"
 
-1.5 [ ] host quirk when driving WSL from the Windows shell
+1.5 [x] host quirk when driving WSL from the Windows shell
         - MSYS/git-bash rewrites unix-looking arguments (/etc/x -> C:/Program Files/Git/etc/x)
         - always use:  wsl -d Debian -- bash -lc '<command>'
         - or prefix the single command with MSYS_NO_PATHCONV=1
@@ -67,13 +71,16 @@ Conventions
         (or git clone https://github.com/kapojko/buildroot-external-microchip.git)
         branches: medicam (SD, boots) / medicam_nand (untrusted reference) / medicam_clean (work)
 
-2.3 [ ] Windows checkout is the editing side, WSL checkout is the building side:
+2.3 [x] Windows checkout is the editing side, WSL checkout is the building side:
         - Windows  D:/Source/buildroot-external-microchip
         - WSL      ~/src/buildroot-external-microchip
         - WSL has a "local" remote -> /mnt/d/Source/buildroot-external-microchip,
           so it can fetch the Windows repo without GitHub:  git fetch local
 
-2.4 [ ] line endings: .gitattributes must pin *.sh (+x), *.dts, *.fragment, *_defconfig
+2.4 [x] line endings: .gitattributes must pin *.sh (+x), *.dts, *.fragment, *_defconfig
+        VERIFIED 2026-10-28: audit clean; the WSL checkout also needs
+        core.fileMode=true (it was false, which kept resurrecting mode-only
+        diffs and dropping exec bits on checkout).
         to LF (ported from medicam_nand in stage 0, task 0.3).
         audit: git ls-files -s -- '*.sh' | awk '$1=="100644"{print "not exec:",$4}'
 
@@ -87,7 +94,8 @@ Conventions
         (BR2_EXTERNAL can also stay unset if the tree was configured with it once;
          check: grep BR2_EXTERNAL_MCHP_PATH .config)
 
-3.2 [ ] current command (12 cores / 15 GiB WSL as measured)
+3.2 [x] current command (12 cores / 15 GiB WSL as measured)  [used for stage 1]
+        NOTE stage 2 uses the O= tree, see 9.8: make O=output-nand ...
         (BR2_EXTERNAL is only needed for the defconfig selection; the resulting
          .config keeps it on its own)
         cd ~/src/buildroot-mchp
@@ -96,13 +104,13 @@ Conventions
         expect: no error, then "Executing post-image script", then images in output/
         record: build wall time <...>, ccache hit rate (BR2_CCACHE=y is set)
 
-3.3 [ ] partial rebuilds (agent may run these)
+3.3 [x] partial rebuilds (agent may run these)
         make linux-rebuild          # kernel + modules + dtb only
         make <pkg>-rebuild          # e.g. openssh-rebuild
         make <pkg>-dirclean <pkg>   # clean re-extract of one package
         make clean    / make defclean   -> full rebuild, user only
 
-3.4 [ ] build result check (no build needed)
+3.4 [x] build result check (no build needed)
         ls -l output/images/{sdcard.img,rootfs.ext4,boot.vfat,zImage,u-boot.bin}
         du -sm output/target
         baseline before trim (medicam, 2026-07): target=211 MiB, rootfs content=221 MiB,
@@ -489,7 +497,7 @@ Conventions
         50 MiB test.bin as residue (clear when the desktop script lands).
 
 --------------------------------------------------------------------------------
-9. STAGE 2 - NAND BOOT                                [ prep done, build pending ]
+9. STAGE 2 - NAND BOOT                       [ VERIFIED on hardware 2026-10-28 ]
 --------------------------------------------------------------------------------
 9.1 [x] at91bootstrap PMECC OOB 224 fragment written (at91bootstrap_nand.fragment:
         PMECC_OOB_224=y, PMECC_OOB_256 off - chip measured 224 in stage 1, F2).
@@ -536,15 +544,112 @@ Conventions
         (0x40000000), so it must be the WHOLE die (4096). Fixed in 9.11.
         Everything before genimage succeeded: bootloaders built,
         post-image-pre.sh copied boot.bin.pmecc + regenerated uboot-env.bin.
-9.10[ ] BUILD RE-RUN PENDING (NAND only; SD already good):
-        make O=output-nand -j$(nproc) 2>&1 | tee ~/src/build-nand.log
+9.10[x] BUILD RE-RUN DONE (NAND only; SD already good) - see 9.12/9.17.
 9.11[x] FIXES after first build: make_clean_no_host.sh keeps host-* build dirs
         (stamps); genimage-nand.cfg numpebs 4056 -> 4096 (whole die; 4 Gbit =
         2048, README updated). flash-nand.sh rootfs EB count stays 4056 (UBI
         region, distinct from genimage's whole-die numpebs).
-9.12[ ] BOARD SESSION 3: SD boot (rescue card) -> /boot/flash-nand.sh -> power
-        off -> remove SD -> NAND boot; 10x reboot + 5x power cut; then SAM-BA
-        recovery path (-b sam9x60d1g, no ::no_extram - F4).
+9.12[x] BOARD SESSION 3 (2026-10-28, hardware bring-up) - NAND BOOT WORKS.
+        Iterations and fixes found only on hardware (all committed):
+        a) rescue SD did not boot: it is based on the NAND build's sdcard.img,
+           whose FAT carries the NAND env as uboot.env (256 KiB, redundant) -
+           the SD U-Boot rejects it (bad CRC -> default env -> looks for
+           at91-sam9x60_curiosity.dtb -> "Could not find a valid device tree").
+           FIX: make-rescue-sd.sh also swaps the SD env (16 KiB) in as uboot.env;
+           the NAND env stays as uboot-env.bin (the flash payload).
+        b) flash-nand.sh aborted with "/dev/mtd0 missing": /dev/mtd0 is a CHAR
+           device (crw, major 90), not block. FIX: test /proc/mtd + [ -c ].
+        c) the script demanded a manual mount of the payload partition. FIX:
+           ensure_boot() auto-mounts mmcblk0p1 at /boot.
+        d) ubiformat refused: "please, first detach mtd6 from ubi0" (booting from
+           SD has ubi0 attached to mtd6 for /data). FIX: write_ubi unmounts the
+           UBIFS volumes and runs ubidetach -m6 first.
+        e) ubiformat refused the bare image: "rootfs.ubifs (size 33013760) is
+           not multiple of eraseblock size (262144)" - mkfs.ubifs output is a
+           multiple of the LEB (253952), not the PEB. Investigating further:
+           ubiformat's -f path uses format(novtbl=1), i.e. a BARE image gets NO
+           volume table (root=ubi0:rootfs would find nothing), while rootfs.ubi
+           (ubinize) carries vol_flags=autoresize, which would grow rootfs to
+           fill the die and leave no room for /data. FIX: proper flow
+           flash_erase -> ubiformat -y (empty) -> ubiattach -m6 ->
+           ubimkvol -N rootfs -S 1238 (~300 MiB) -> ubiupdatevol <rootfs.ubifs>.
+           Also DROPPED -s 512 -O 2048: the frozen sub-page assumption is wrong
+           for this chip (see 9.13).
+9.13[x] MEASURED UBI/kernel geometry on the board (this is the truth, and it
+        overrides the stage-1.5 assumption):
+          ubi0: PEB 262144, LEB 253952, min/max I/O 4096/4096,
+                sub-page size 4096, VID header offset 4096, data offset 8192
+          good PEBs 4052, bad PEBs 4 (numbers 4052..4055), corrupted 0
+          rootfs volume 1238 LEBs (314392576 B = 299.8 MiB) -> / 278.1M, 28.0M used
+          data   volume 2732 LEBs (693796864 B = 661.6 MiB) -> /data 617.4M avail
+        i.e. NO sub-pages; the frozen genimage vid-header-offset 0x200 /
+        sub-page 0x200 do not match this chip. Kernel/dmesg clean: no NAND/UBI/
+        UBIFS/ECC errors, /proc/cmdline root=ubi0:rootfs rootfstype=ubifs.
+        /home resolves into the mounted data volume; identity preserved
+        (medicam-48db74 / 2a:45:d5:48:db:74) after SD -> NAND.
+        Bad blocks are factory ones near the die end; flash_erase's whole-chip
+        erase reports an EIO then falls back to per-eraseblock erase (skips the
+        bad ones) - expected, not a fault (same for "Erasing entire chip
+        failure" + "Skipping bad block" lines).
+9.14[x] F26 (open, ROM-side) - delay before RomBOOT on a cold power-on.
+        VERIFIED measurements (board, 2026-10-28):
+          - bootable SD card (valid boot.bin)          : immediate (SD boot)
+          - THE SAME card, formatted blank in Windows  : ~20 s
+          - blank SD card / no SD card (measured first): ~30 s
+          - RESET pressed at any moment                : immediate
+        The same physical card is immediate with valid content and ~20 s once
+        formatted, so the trigger is card CONTENT, not card presence or loading:
+        the delay appears only when the ROM finds no valid code on SD and falls
+        back to NAND. That places it in the ROM's NAND-fallback path.
+        Unknown: why that path takes 20-30 s. NOT NAND readiness - tPOR/tVSL are
+        us..ms, the ROM needs a <= 100 us NAND reset time (DS 17.1.4.7.1), and a
+        RESET a few seconds after power-on boots from NAND at once.
+        Recorded conflict (not resolved): TB3380 4.5 says a missing RomBOOT means
+        the MPU is held in reset / bad power sequencing and that such a failure
+        "cannot be due to the booting process from the NAND Flash device"; this
+        board boots from NAND within seconds on a warm reset while showing no
+        RomBOOT for 20-30 s on a cold one, so that generalisation does not apply.
+        Hardware facts gathered while measuring (verified, kept for reference):
+        U1 MCP16501 PMIC - nRSTO (pin 2) drives the NRST net with reset button
+        S2, R2 pull-up and R19->JTAG J3.8; START/nSTRT (pin 14) has the auto-start
+        cap C3 and power button S1; the PMIC datasheet requires PWRHLD from the
+        MPU just before nRSTO releases (PM_PWRHLD net). 32.768 kHz crystal X2
+        (NX2012SA-32) has its 15 pF caps C59/C60. NAND control lines have no
+        external pull resistors (PLAN F27).
+        DECISION (user): accepted as-is; affects only time-to-first-output.
+9.16[x] POWER-CUT / REBOOT MATRIX (partial, user-run while chasing F26): ~5x
+        reboot and ~5x cold power-on, all consistent (every cold boot waited
+        ~20-30 s before RomBOOT, then booted; no corruption, /data intact).
+        Judged sufficient for
+        "survives normal cycling". NOT yet done, and worth one deliberate pass:
+        cut the power WHILE writing to /data (the actual UBIFS corruption risk),
+        then verify the volume after reboot.
+9.17[x] BASELINE (2026-10-28, tree at the commit that added this entry)
+        Build outputs are CURRENT w.r.t. the sources: after the successful build
+        (e297746) only flash-nand.sh, make-rescue-sd.sh, the docs and exec-bit
+        changes landed, and none of those is compiled into rootfs/kernel/
+        bootloaders. The rescue image WAS stale (embedded flash-nand.sh md5
+        dab07b3e vs HEAD 23cc03b8) and was regenerated + verified:
+          mtype ... ::/flash-nand.sh | md5sum == repo file at HEAD
+        Apparent sizes and sha256 (du reports sparse: 61M / 86M / 1.1G):
+          output/images/sdcard.img            286261248 B  345f6c52...
+          output-nand/images/sdcard.img       537919488 B  ea43640a...
+          output-nand/images/sdcard-rescue.img 537919488 B 99c79993...  <- FIELD CARD
+          output-nand/images/medicam-nand.img 1073741824 B d30654c5...  <- SAM-BA recovery
+          output-nand/images/rootfs.ubifs      33013760 B  a342e720...
+          output-nand/images/boot.bin.pmecc       13996 B  494aab21...
+        The field card image is also copied to D:/Temp/sdcard-rescue.img
+        (sha256 99c799935d0e83257d988f00432254877ed50ca9b070a6f63954775817dc844c).
+        Keep as the working baseline: SD dev image, NAND artifacts, rescue card.
+9.18[x] STAGE 2 CLOSED (2026-10-28) with two items explicitly DEFERRED to a later
+        session (user decision - no further work now):
+          D1. hard power cut WHILE writing to /data, then verify the volume
+              (the real UBIFS journal-recovery test; 9.16).
+          D2. run the SAM-BA recovery path once end to end
+              (sam-ba-flash-nand.ps1, -b sam9x60d1g) so path B is proven on
+              hardware, not just written.
+        Also deferred: F26 (cold-boot delay, open - PLAN F26 / LOG 9.14 / 10.7),
+        LOG 10.1/10.2/10.3/10.6 and the C++ trim (10.5).
 
 --------------------------------------------------------------------------------
 10. OPEN ITEMS / PENDING DECISIONS
@@ -560,3 +665,13 @@ Conventions
         (BR2_PACKAGE_SYSTEMD_VCONSOLE_DEFAULT_KEYMAP="" drops kbd ~5 MiB; host-safe).
         C++/libstdc++ (~1.8 MiB) DELIBERATELY DEFERRED: turning CXX off forces a
         one-time cross-toolchain rebuild, which fights the shared-host goal.
+10.7 [ ] F26 - cold-boot delay before RomBOOT: PLANNED FOLLOW-UP (open).
+        State: content-dependent (same card: immediate with valid boot.bin, ~20 s
+        formatted blank) -> ROM NAND-fallback path; mechanism unknown; NAND
+        readiness ruled out; TB3380 4.5 conflicts with the observation.
+        Next measurements, in order:
+          1. raw-byte DBGU capture over the whole window (any bytes at all?);
+          2. repeat timing on several cold boots (fixed value = timer, spread =
+             retries);
+          3. scope NRST + PWRHLD + NAND VCC/R-B# at cold power-on, bootable card
+             vs no card (when does the SoC start, when is NAND accessed?).
