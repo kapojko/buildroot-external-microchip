@@ -122,6 +122,19 @@ write_ubi() {
     # $1 = device, $2 = file on $BOOT, $3 = eraseblock count
     dev=$1; file=$2; cnt=$3
     [ -f "$BOOT/$file" ] || die "missing $BOOT/$file"
+
+    # The board may have UBI attached to this mtd (the /data volume lives on
+    # the same UBI region when booted from SD). ubiformat refuses to work on an
+    # attached mtd, so unmount every UBIFS volume and detach first.
+    log "Detaching UBI from $dev ..."
+    awk '$3 == "ubifs" && $1 ~ /^ubi[0-9]+:/ {print $2}' /proc/self/mounts | \
+        while read -r mp; do umount "$mp" 2>/dev/null && log "unmounted $mp"; done
+    if ubidetach -m "${dev#/dev/mtd}" 2>/dev/null; then
+        log "detached ubi from $dev"
+    else
+        log "no UBI attached to $dev (fine)"
+    fi
+
     log "Erasing $dev ($cnt x ${EB_KB} KiB)..."
     flash_erase "$dev" 0 "$cnt"
     log "Formatting $dev as UBI with $BOOT/$file"
