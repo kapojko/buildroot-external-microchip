@@ -151,8 +151,18 @@ Largest installed packages (measured):
 ```
 Sum of attributed packages ≈ 150 MiB; the remaining ~60 MiB is unattributed floor
 (systemd+udev, glibc, kernel modules, util-linux, iproute2, bash/busybox).
-**Consequence: a systemd-based trimmed image has a floor of ≈ 85 MiB**, expect
-≈ 110–115 MiB after the trim in section 7.3.
+
+**Stage 1 result (clean build, 2026-10-28) — the estimate above was pessimistic:**
+the trimmed image is **63 MiB** (`du -sm output/target`), `rootfs.tar` 61 MiB,
+2 901 files / 3 929 tar entries (was 11 541), `sdcard.img` **273 MiB**,
+`boot.vfat` 16 MiB with `zImage` 5.34 MiB + `u-boot.bin` 448 KiB.
+Largest installed packages now: systemd 10.5, file 8.3, openssh 5.8, libopenssl 4.2,
+util-linux 3.6, linux (modules) 3.2, glibc 2.1, kbd 2.0, gcc-final (libstdc++) 1.8,
+tzdata 1.7, iproute2 1.7 MiB. Unattributed overlap ≈ 6 MiB.
+Two items from the drop list do not actually leave the image: `kbd` (pulled in by
+systemd's default vconsole keymap, ≈ 5 MiB with keymaps + consolefonts) and
+busybox applet symlinks such as `usr/bin/tree` (a symlink, no bytes) — see the
+candidates in section 10.
 
 ### 3.3 Kernel / toolchain facts (verified in `output/build/linux-custom/.config`)
 
@@ -461,7 +471,8 @@ fb-test-app, mtd (+UBI tools).
 **ADD** — `BR2_PACKAGE_UTIL_LINUX_RFKILL`, `BR2_PACKAGE_LINUX_FIRMWARE` +
 `…_RALINK_RT2XX`, `BR2_PACKAGE_WGET`.
 
-Expected result: rootfs **211 → ~110–115 MiB**, `sdcard.img` **529 → ~273 MiB**.
+Result: rootfs **211 → 63 MiB** (estimate was 110–115), `sdcard.img`
+**529 → 273 MiB** (16 MiB FAT + 256 MiB ext4 + 1 MiB offset).
 
 ### 7.4 Exit criteria (stage 1 "done")
 
@@ -469,7 +480,8 @@ Expected result: rootfs **211 → ~110–115 MiB**, `sdcard.img` **529 → ~273 
 2. `ssh root@medicam-xxxxxx` works with the password; `systemctl is-active sshd`
    is `active`; the DHCP lease/DNS name matches `medicam-xxxxxx`; two boards on
    the same LAN get different names.
-3. `du -sm /` ≈ 110 MiB and `output/images/sdcard.img` ≈ 273 MiB — **recorded**.
+3. `du -sm /` ≈ **63 MiB** (measured at build time; confirm on the board) and
+   `output/images/sdcard.img` = 273 MiB — **recorded**.
 4. `mtdinfo /dev/mtd0` reports `erasesize 262144`, `pagesize 4096`,
    **`oobsize 224`**, 8 partitions; `dmesg | grep -i pmecc` clean.
    **This value gates stage 2.**
@@ -482,12 +494,13 @@ Expected result: rootfs **211 → ~110–115 MiB**, `sdcard.img` **529 → ~273 
 
 ### 8.1 Chip decision (driven by the stage 1 measurement)
 
-Content to fit: rootfs (~110 MiB) + FRP (~15 MiB) + user app (~20 MiB) + `/data`.
+Content to fit (measured): rootfs **63 MiB** + FRP (~15 MiB) + user app (~20 MiB)
++ `/data` ≈ 98 MiB of the usable volume.
 
 | Chip | Raw | Usable UBIFS | Assessment |
 |---|---|---|---|
-| 2 Gbit | 256 MiB | ~233 MiB | **Not sufficient**: 110 + data ≈ 96 % full (UBIFS GC degrades), no A/B, no media |
-| **4 Gbit** | 512 MiB | ~480 MiB | **Floor**: rootfs + ~350 MiB data; A/B possible as 150 + 150 + 180 |
+| 2 Gbit | 256 MiB | ~233 MiB | **Now viable for single-slot**: 98 used, ~135 MiB for `/data`; no A/B, no media, GC margin thin |
+| **4 Gbit** | 512 MiB | ~480 MiB | **Recommended**: rootfs + ~380 MiB data; A/B possible as 100 + 100 + 280 |
 | 8 Gbit (populated) | 1 GiB | ~960 MiB | Comfortable: A/B + media storage |
 
 Note: 2 Gbit x8 parts are commonly 2 KiB page / 128 KiB block
@@ -567,6 +580,14 @@ configuration (SD rootfs + NAND `/data`), record findings in this file.
 
 ## 10. Stage 3 — hardening / later
 
+* **Remaining trim candidates (measured, not yet done — ≈ 15 MiB):**
+  `file` 8.3 MiB (`/usr/share/misc/magic.mgc`, only a debugging aid),
+  `kbd` + keymaps + consolefonts ≈ 5 MiB (the board has no display: setting
+  `BR2_PACKAGE_SYSTEMD_VCONSOLE_DEFAULT_KEYMAP=""` drops the whole chain),
+  `libstdc++` 1.8 MiB + gdb.py (nothing is C++; `BR2_TOOLCHAIN_BUILDROOT_CXX` off).
+  Each change needs a clean rebuild (F22), so batch them with the stage 1.5 work.
+  Note: busybox applet symlinks (e.g. `usr/bin/tree`) reappear even when the
+  standalone package is dropped — they cost no space and are not a regression.
 * Watchdog supervision: `&watchdog` is enabled in the DTS; set
   `RuntimeWatchdogSec=` in `/etc/systemd/system.conf`.
 * Optional persistent journal: `Storage=persistent` with `SystemMaxUse=` and
