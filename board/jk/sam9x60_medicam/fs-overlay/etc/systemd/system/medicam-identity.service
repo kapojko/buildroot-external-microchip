@@ -1,0 +1,16 @@
+[Unit]
+Description=Apply the board identity (MAC, serial) from the on-board EEPROM
+Documentation=file:/usr/local/sbin/medicam-identity.sh
+# The MAC has to be final before systemd-networkd starts (DHCP lease, DNS name)
+# and before medicam-hostname derives the hostname from it.
+After=local-fs.target
+Before=medicam-hostname.service systemd-networkd.service network-pre.target
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/medicam-identity.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -9,4 +9,5 @@
 # (85-) cannot override 90-systemd.preset - it does not mention these units.
 
 enable sshd.service
+enable medicam-identity.service
 enable medicam-hostname.service

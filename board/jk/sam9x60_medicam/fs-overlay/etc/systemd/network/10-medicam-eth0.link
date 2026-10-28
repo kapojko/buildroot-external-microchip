@@ -1,0 +1,18 @@
+# MediCam: the eth0 MAC comes from the EEPROM (medicam-identity.service), not
+# from udev.
+#
+# /usr/lib/systemd/network/99-default.link sets MACAddressPolicy=persistent,
+# which derives an address from /etc/machine-id + interface name - stable across
+# reboots, but different as soon as the rootfs image is rewritten (plan F24).
+# With "none", udev leaves the address alone and medicam-identity.service is the
+# only thing that decides it: same MAC, same hostname, after any reflash.
+#
+# Note: the policy only runs when the device appears (udev), so this file mainly
+# removes the double assignment; correctness comes from the service, which runs
+# before systemd-networkd either way.
+
+[Match]
+OriginalName=eth0
+
+[Link]
+MACAddressPolicy=none

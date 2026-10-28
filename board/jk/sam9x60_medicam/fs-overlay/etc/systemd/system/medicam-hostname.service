@@ -4,7 +4,7 @@ Documentation=file:/usr/local/sbin/medicam-hostname.sh
 # Needs the rootfs writable (it rewrites /etc/hostname and /etc/hosts) and must
 # finish before systemd-networkd starts, so the DHCP request, the DHCP lease and
 # the DNS record all carry the final name.
-After=local-fs.target
+After=local-fs.target medicam-identity.service
 Before=systemd-networkd.service network-pre.target
 Wants=local-fs.target
 
