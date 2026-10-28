@@ -12,9 +12,11 @@
 #     from SD (they look for U-Boot on NAND).
 #   * Boot-from-SD requires SD-variant bootloaders, which only the SD build
 #     produces (Buildroot builds one bootloader variant per defconfig).
-#   * So: base = NAND sdcard.img, then swap boot.bin/u-boot.bin for the SD
-#     variants, keep the NAND u-boot as u-boot-nand.bin (flash-nand.sh reads
-#     that name — see its PARTITIONS table), add flash-nand.sh.
+#   * So: base = NAND sdcard.img, then swap boot.bin/u-boot.bin/uboot.env for
+#     the SD variants (SD bootloaders + SD env, so the card boots from SD),
+#     keep the NAND u-boot as u-boot-nand.bin (flash-nand.sh reads that name —
+#     see its PARTITIONS table), keep the NAND env as uboot-env.bin (payload),
+#     add flash-nand.sh.
 #   * zImage and dtb are identical in both builds — no swap needed.
 #
 # The FAT partition starts at byte offset 1 MiB (genimage offset = 1M in both
@@ -69,6 +71,12 @@ mcopy -o -i "$OUT_IMG"@"@"$FAT_OFF "$SD_DIR/images/boot.bin"      ::/boot.bin
 mcopy -o -i "$OUT_IMG"@"@"$FAT_OFF "$SD_DIR/images/u-boot.bin"    ::/u-boot.bin
 mcopy -o -i "$OUT_IMG"@"@"$FAT_OFF "$NAND_DIR/images/u-boot.bin"  ::/u-boot-nand.bin
 mcopy -o -i "$OUT_IMG"@"@"$FAT_OFF "$FLASH_SH"                    ::/flash-nand.sh
+# CRITICAL: the NAND build's FAT ships the NAND env as uboot.env (256 KiB,
+# redundant format) — the SD U-Boot rejects it (bad CRC -> default env ->
+# loads the curiosity DTB name, not at91-sam9x60_medicam.dtb -> boot fails).
+# Swap in the SD env (16 KiB) so the card boots from SD; the NAND env stays
+# on the FAT as uboot-env.bin, which flash-nand.sh writes to mtd2/mtd3.
+mcopy -o -i "$OUT_IMG""@""@"$FAT_OFF "$SD_DIR/images/uboot-env.bin" ::/uboot.env
 
 echo "==> boot partition now contains:"
 mdir -i "$OUT_IMG"@"@"$FAT_OFF ::/
