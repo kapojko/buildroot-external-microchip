@@ -376,6 +376,35 @@ Conventions
         => identity must move to the 24C256 EEPROM (blank, 32 KiB):
            new stage 1.5 task 8.4.
 
+7.15 [x] board identity implemented and verified on hardware (F24 / PLAN 8.4)
+        files: fs-overlay/usr/local/sbin/medicam-identity.sh,
+               fs-overlay/etc/systemd/system/medicam-identity.service,
+               fs-overlay/etc/systemd/network/10-medicam-eth0.link,
+               preset gains "enable medicam-identity.service",
+               medicam-hostname.service now After=medicam-identity.service
+        record (96 ASCII bytes at EEPROM offset 0, space padded):
+          MCM1 1 mac=<12 hex> serial=<16 chars> crc=<cksum of the prefix>
+        logic: valid record -> apply and stop (never rewritten, EEPROM endurance);
+               otherwise adopt the address the board is using now, else a
+               TRNG-generated locally-administered MAC, then program the record.
+        tested on the live board BEFORE flashing (script copied to /tmp):
+          blank EEPROM -> "adopting the current MAC 2a45d548db74",
+                          "EEPROM programmed: MCM1 1 mac=2a45d548db74
+                           serial=0000000000000000 crc=983023561"
+          second run   -> "EEPROM identity ok: ...", no write (idempotent)
+          read-back    -> dd if=/sys/bus/i2c/devices/0-0050/eeprom bs=96 count=1
+                          shows the record, 32 bytes write path works (at24
+                          splits into page writes itself)
+        image: sdcard-medicam-stage1c.img, sha256 28ff500e..., 273 MiB / 55 MiB
+        verify after flashing (the EEPROM of this board already holds the record):
+          - boot: MAC 2a:45:d5:48:db:74, hostname medicam-48db74 (unchanged)
+          - rewrite the SD card with the same image and boot again: the MAC must
+            stay the SAME (this is the actual fix - the machine-id changed)
+          - journalctl -b | grep medicam-identity  -> "EEPROM identity ok: ..."
+          - blanking the record (first 96 bytes to 0xFF) must regenerate+reprogram
+        factory provisioning is out of scope: serial stays 0000000000000000 and
+        can be overwritten later by the desktop script (same record).
+
 8. STAGE 1.5 - NAND AS /data                                    [ ] not started
 --------------------------------------------------------------------------------
 8.1 [ ] chip decision from the measured rootfs size (2/4/8 Gbit, PLAN 8.1)

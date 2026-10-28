@@ -586,7 +586,7 @@ partitions, so `ubimkvol`/`ubirsvol` can resize `/data` in the field.
 2. `RequiresMountsFor=/data` in every unit that writes there.
 3. Keep `/etc` on the rootfs (no `/etc` overlay) — updates must stay predictable.
 
-### 8.4 Board identity in the EEPROM (new, from F24)
+### 8.4 Board identity in the EEPROM (F24) — **implemented 2026-10-28**
 
 The MAC (and therefore the hostname) currently comes from
 `/etc/machine-id` via systemd-udevd's `MACAddressPolicy=persistent`, so it changes
@@ -608,6 +608,12 @@ whenever the SD card is rewritten — unacceptable for "target the board as
    overriding it, and the identity unit becomes the single source of truth.
 4. Factory provisioning is out of scope: first boot programs the EEPROM; the
    desktop script can later overwrite the serial/MAC fields.
+
+   Implementation: `medicam-identity.sh` + `medicam-identity.service` +
+   `etc/systemd/network/10-medicam-eth0.link`, record format
+   `MCM1 1 mac=<12hex> serial=<16> crc=<cksum>` (96 bytes at offset 0).
+   Tested on hardware (LOG 7.15); the remaining acceptance test is an SD rewrite
+   keeping the same MAC.
 
 **Exit criteria (1.5):** `/data` is mounted from NAND after a reboot and survives
 reflashing the SD rootfs; `/home` resolves into `/data/home`; a 50 MiB write +
