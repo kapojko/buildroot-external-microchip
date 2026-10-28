@@ -303,27 +303,79 @@ Conventions
 7.11a [x] defconfig validated WITHOUT a build (kconfig only, ~40 s)
         (kept for reference: 276 BR2_PACKAGE_*=y, all planned KEEP =y, all DROP absent,
         DBUS=y is selected by systemd and is expected)
-7.12 [ ] BOARD SESSION 1 (no SD in the card reader of the PC, card written from output/images/sdcard.img)
-        - serial login asks for the root password                        [ ]
-        - ssh root@medicam-xxxxxx with the password                      [ ]
-        - systemctl is-active sshd                                       -> active
-        - hostname                                                       -> medicam-xxxxxx
-        - du -sm /                                                       -> <...> MiB
-        - ls /data ; ls -l /home                                         -> home -> data/home
-        - mtdinfo /dev/mtd0   -> erasesize 262144, pagesize 4096, oobsize <224?>   GATES STAGE 2
-        - cat /proc/mtd ; dmesg | grep -iE 'nand|pmecc'                   [ ]
-        - rfkill list ; iw dev ; (RT5370 plugged) iw dev                 -> wlan0
-        - lsusb ; mount a USB stick                                      [ ]
-        - ldc / v4l2grab to /data (sanity, camera untouched)             [ ]
-        record the numbers into 3.4 and into PLAN section 3.2
-        kconfig check already done (see 7.11a):
-          make BR2_EXTERNAL=/home/yury/src/buildroot-external-microchip sam9x60_medicam_defconfig
-          -> no warnings, .config has 276 BR2_PACKAGE_*=y (baseline before trim: 430)
-          -> every planned KEEP symbol is =y, every planned DROP symbol is absent
-          -> BR2_TARGET_ROOTFS_EXT2_SIZE="256M", root password hash present
-  exit: PLAN 7.4 criteria 1-6 met, measurements recorded.
+7.12 [x] BOARD SESSION 1 (2026-10-28) - all stage 1 criteria met
+        reachability: board answers on DHCP (192.168.3.16, later .17 after a
+        reflash), SSH as root with the password works from the WSL host.
+        Measured on the board (image sdcard-medicam-stage1b.img, sha256 ed057369...):
+          hostname            medicam-48db74 = last 6 hex of 2a:45:d5:48:db:74
+          /etc/hosts          127.0.1.1 medicam-48db74 (rewritten by the unit)
+          sshd                active, enabled
+          serial login        password required, no autologin (journal:
+                              "login[..]: invalid password for 'UNKNOWN' on 'ttyS0'")
+          du -sm /            50 MiB      (df: 47.6 MiB used of 229.9 M, 22 %)
+          zImage              5.62 MiB, u-boot.bin 448 KiB, sdcard.img 273 MiB
+          mtdinfo /dev/mtd0   erasesize 262144, min I/O 4096, subpage 4096, OOB 224
+          partitions          7 (DTS has 7 nodes; the plan said 8 - corrected)
+          kernel NAND line    "Micron MT29F8G08ABACAWP, 1024 MiB, SLC, page 4096, OOB 224"
+          USB                 lsusb OK; stick 346d:5678 -> /dev/sda1 58.6 G,
+                              mount -o ro OK, umount OK
+          camera              (module plugged) "ov2640 Product ID 26:42 Manufacturer
+                              ID 7f:a2" -> Probed, /dev/video0 = atmel_isi,
+                              v4l2grab -W 320 -H 240 -> valid JPEG, 6666 B
+                              (green cast = no AWB/AEC tuning, expected)
+          sysrq               /proc/sys/kernel/sysrq = 16 (CONFIG_MAGIC_SYSRQ)
+        => stage 2 is unblocked: OOB 224 confirmed on real hardware (F2).
 
---------------------------------------------------------------------------------
+7.12a [x] boot-log classification (so nobody re-investigates these)
+        OUR warnings, fixed in this session (see 7.13):
+          - "Couldn't write '16' to 'kernel/sysrq'"            -> CONFIG_MAGIC_SYSRQ
+          - "systemd-journald.service: unit configures an IP
+             firewall, but the local system does not support
+             BPF/cgroup firewalling"                            -> BPF_SYSCALL + CGROUP_BPF
+          - hostname "medicam-62" (2 hex digits)                -> script off-by-four
+          - "root (automatic login)" on the console             -> getty drop-in
+        BENIGN, no action (documented, verified harmless):
+          - "Bad block table not found for chip 0" (x2)  virgin NAND, the driver
+            creates the BBT; expected on a factory-fresh chip
+          - "rtc-at91sam9 ... rtc1: SET TIME!"           no RTC backup cell
+          - "gpio gpiochipN: Static allocation of GPIO base
+             is deprecated"                               kernel deprecation, at91 pinctrl
+          - "at24 0-0050: supply vcc not found,
+             using dummy regulator"                        DTS has no vcc-supply (cosmetic)
+          - "Fixed dependency cycle(s)" ISI <-> camera  fw_devlink, both nodes resolve
+          - "Kernel memory protection not selected"      CONFIG_STRICT_KERNEL_RWX is off
+            (candidate for stage 3 hardening)
+          - "sd 0:0:0:0: [sda] No Caching mode page
+             found / Assuming drive cache"                 USB stick quirk
+          - "systemd-resolved: Using degraded feature set
+             UDP+EDNS0 instead of TLS+EDNS0"               LAN DNS has no DNS-over-TLS
+          - "systemd-networkd: eth0: found matching network
+             '/etc/systemd/network/eth0.network', based on
+             potentially unpredictable interface name"     interface is not renamed
+          - "ov2640 ... Product ID error 87:87" (camera NOT plugged) -> F23
+          - "lsusb: unable to initialize usb spec"      usb.ids not shipped (open 10.6)
+
+7.13 [x] three fixes applied after board session 1 (kernel-rebuild + images, 15 min)
+        a) hostname: ${mac#??????????} stripped 10 of 12 hex digits -> ${mac#??????}
+        b) serial-getty@.service.d/10-no-autologin.conf: ExecStart reset, because the
+           external tree patches the vendor unit with --autologin root
+           (patches/systemd/0002-package-systemd-add-autologin-as-root.patch)
+        c) kernel fragment: CONFIG_MAGIC_SYSRQ, CONFIG_BPF_SYSCALL, CONFIG_CGROUP_BPF
+        rebuilt with: make linux-rebuild && make -j$(nproc)   (no full rebuild needed:
+        no toolchain and no package-set change; 55 MiB rootfs unchanged)
+        verified in the image and on the board afterwards (7.12 table).
+
+7.14 [x] the MAC is not a hardware address (F24)
+        "ethtool -P eth0" -> 00:00:00:00:00:00, DTS has no local-mac-address,
+        kernel: "macb f802c000.ethernet: invalid hw address, using random".
+        The final address is systemd-udevd's MACAddressPolicy=persistent
+        (/usr/lib/systemd/network/99-default.link) = hash(machine-id, ifname):
+          - stable across reboots: verified (reboot -> same 2a:45:d5:48:db:74)
+          - changes when the SD rootfs is rewritten: 16:e5:67:5c:c6:62 -> 2a:45...
+          - hostname follows the MAC, so a reflash renames the board
+        => identity must move to the 24C256 EEPROM (blank, 32 KiB):
+           new stage 1.5 task 8.4.
+
 8. STAGE 1.5 - NAND AS /data                                    [ ] not started
 --------------------------------------------------------------------------------
 8.1 [ ] chip decision from the measured rootfs size (2/4/8 Gbit, PLAN 8.1)
@@ -331,6 +383,10 @@ Conventions
         audit: git grep -n "0x[aA]00000\|numpebs\|mtdparts"
 8.3 [ ] data.mount + medicam-data.service (resolve the UBI MTD by label, ubiattach,
         ubimkvol/mkfs.ubifs on first boot), RequiresMountsFor=/data
+8.4 [ ] board identity in the EEPROM (F24): magic+version+MAC+serial+CRC at offset 0,
+        medicam-identity.service sets `ip link set dev eth0 address <mac>` before
+        systemd-networkd, MACAddressPolicy=none for eth0; first boot programs the
+        record from the TRNG. Verify: MAC and hostname unchanged after rewriting the SD.
 8.4 [ ] BOARD SESSION 2: /data mounted after reboot, 50 MiB write + reboot + read-back,
         /home -> /data/home, survives reflashing the SD rootfs
 
@@ -354,6 +410,8 @@ Conventions
 10.3 [ ] keep the historical "Buildroot BSP MediCam.md" as-is or fold it into this log?
 10.4 [ ] /home: keep the symlink (one harmless makedevs/tmpfiles message) or bind-mount
           /data/home onto a real /home with a home.mount unit at stage 1.5?
+10.6 [ ] `lsusb` prints "unable to initialize usb spec" (no /usr/share/hwdata/usb.ids).
+          Either add hwdata + usb ids (~1 MiB) for readable device names, or accept.
 10.5 [ ] batch these trims into the stage 1.5 clean rebuild (~7 MiB): set
           BR2_PACKAGE_SYSTEMD_VCONSOLE_DEFAULT_KEYMAP=""
           (drops kbd + keymaps + consolefonts, ~5 MiB, the board has no display), and turn

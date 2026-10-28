@@ -1,7 +1,9 @@
 # MediCam base image — implementation plan
 
-Status: **agreed, not yet implemented.** Implementation happens in later sessions,
-stage by stage, on branch `medicam_clean` (created from `medicam`).
+Status: **stage 0 and stage 1 done and verified on hardware (2026-10-28).**
+Stage 1.5 (chip decision + NAND `/data` + board identity) is next. Work happens
+session by session on branch `medicam_clean` (created from `medicam`); see the
+working rules in section 0 and the measured log in LOG_base_image.txt.
 
 Board: SAM9X60D1G SiP (DDR2 128 MiB in package), 128 MiB RAM, MT29F8G08ABACAWP
 parallel NAND (1 GiB), OV2640 camera on ISI, 24C256 EEPROM @0x50 on I2C0,
@@ -156,6 +158,8 @@ Sum of attributed packages ≈ 150 MiB; the remaining ~60 MiB is unattributed fl
 the trimmed image is **55 MiB** (`du -sm output/target`; 63 MiB before `file` was
 dropped), `rootfs.tar` 52 MiB, 3 923 tar entries (was 11 541), `sdcard.img` **273 MiB**,
 `boot.vfat` 16 MiB with `zImage` 5.34 MiB + `u-boot.bin` 448 KiB.
+On the board: `du -sm /` = **50 MiB**, `df` 47.6 MiB used of 229.9 M (256 MiB ext4),
+`zImage` 5.62 MiB (kernel + SysRq/BPF), `u-boot.bin` 448 KiB.
 Largest installed packages now: systemd 10.5, openssh 5.8, libopenssl 4.2,
 util-linux 3.6, linux (modules) 3.2, glibc 2.1, kbd 2.0, gcc-final (libstdc++) 1.8,
 tzdata 1.7, iproute2 1.7 MiB. Unattributed overlap ≈ 6 MiB. (Sorted before the
@@ -321,6 +325,28 @@ symlink (exit status 0, the symlink survives; the runtime twin, systemd's
 `Q /home` in `tmpfiles.d/home.conf`, is masked by the board overlay). → **Recorded
 in stage 1 (task 1.11) / LOG 7.11b**.
 
+**F23 — the OV2640 needs the module to be plugged; nothing else.** With the
+module absent the driver reports `ov2640 0-0030: Product ID error 87:87` and `i2cdetect -y 0`
+shows nothing at `0x30` (the bus floats), and no `/dev/video0` appears. With the
+module fitted: `Product ID 26:42 Manufacturer ID 7f:a2` → `OV2640 Probed`,
+`/dev/video0` is `atmel_isi`, `v4l2grab -W 320 -H 240` writes a valid JPEG. The
+green cast of the raw frame is the missing AWB/AEC tuning, not a driver fault.
+No DTS or kernel change needed.
+
+**F24 — the board has no hardware MAC address, so its identity lives in the SD
+card.** Measured: `ethtool -P eth0` → `00:00:00:00:00:00`, the DTS has no
+`local-mac-address`, and the kernel logs `macb f802c000.ethernet: invalid hw
+address, using random`. The final address comes from systemd-udevd's
+`99-default.link` (`MACAddressPolicy=persistent`), i.e. a hash of
+`/etc/machine-id` + interface name: stable across reboots (verified), but **it
+changes whenever the rootfs (machine-id) is regenerated**, and the hostname
+follows it (`medicam-48db74` today, `medicam-62` on the previous card). Two
+boards still get different names, so stage 1 criterion 2 holds; but the
+desktop-script contract of section 11 ("target the board as medicam-<mac6>")
+requires an identity that survives reflashing. Fix: store the MAC (and later a
+board serial) in the on-board 24C256 EEPROM (blank, 32 KiB) and apply it before
+`systemd-networkd` → new task in stage 1.5.
+
 **F19 — U-Boot/partition margin is thin.** `u-boot.bin` is 580 184 B in a 768 KiB
 partition; `zImage` is 5.6 MiB. The `medicam` DTS allots only 6 MiB to the kernel
 — too tight for growth. Use the `medicam_nand` values (8 MiB kernel, rootfs at
@@ -347,7 +373,7 @@ partitions + `ubiformat`/`ubiupdatevol` for the rootfs volume).
 | Init | systemd 256, `journald` **volatile** |
 | Rootfs | **256 M ext4**, no auto-grow (no `e2fsprogs`) |
 | Auth | root password (crypt hash in defconfig) + `PermitRootLogin yes` + `PasswordAuthentication yes`; serial console also asks for the password; key-based auth out of scope |
-| Hostname | unique per board at first boot: `medicam-<last 6 hex of eth0 MAC>`, set before `systemd-networkd` |
+| Hostname | unique per board at first boot: `medicam-<last 6 hex of eth0 MAC>`, set before `systemd-networkd`; the MAC must come from the EEPROM (F24 / task 8.4) |
 | Timezone | **UTC** everywhere (tzdata kept, no `BR2_TARGET_LOCALTIME`) |
 | Wireless | minimal **Wi-Fi client**: `wpa_supplicant` (no AP/EAP/WPS), `iw`, `wireless-regdb`, util-linux `rfkill`, `linux-firmware` Ralink; kernel `rt2800usb` unchanged |
 | Bluetooth | **no BlueZ**; kernel BT stays compiled in (add BlueZ later if a use case appears) |
@@ -475,19 +501,30 @@ fb-test-app, mtd (+UBI tools).
 Result: rootfs **211 → 63 MiB** (estimate was 110–115), `sdcard.img`
 **529 → 273 MiB** (16 MiB FAT + 256 MiB ext4 + 1 MiB offset).
 
-### 7.4 Exit criteria (stage 1 "done")
+### 7.4 Exit criteria (stage 1 "done") — **all met on 2026-10-28**
 
-1. Boots from SD; serial login **requires the root password**.
-2. `ssh root@medicam-xxxxxx` works with the password; `systemctl is-active sshd`
-   is `active`; the DHCP lease/DNS name matches `medicam-xxxxxx`; two boards on
-   the same LAN get different names.
-3. `du -sm /` ≈ **63 MiB** (measured at build time; confirm on the board) and
-   `output/images/sdcard.img` = 273 MiB — **recorded**.
-4. `mtdinfo /dev/mtd0` reports `erasesize 262144`, `pagesize 4096`,
-   **`oobsize 224`**, 8 partitions; `dmesg | grep -i pmecc` clean.
-   **This value gates stage 2.**
-5. `lsusb` works; a USB mass-storage stick mounts.
-6. No build-time regressions: `make` completes with the trimmed set (proves F7 fixed).
+1. Boots from SD; serial login **requires the root password** ✔ — the external
+   tree's systemd autologin patch is neutralised by
+   `fs-overlay/etc/systemd/system/serial-getty@.service.d/10-no-autologin.conf`;
+   the journal shows `login[..]: invalid password for 'UNKNOWN' on 'ttyS0'`.
+2. `ssh root@medicam-xxxxxx` works with the password ✔; `systemctl is-active sshd`
+   = `active`, `is-enabled` = `enabled` ✔; hostname **`medicam-48db74`** = last 6
+   hex of the eth0 MAC, `/etc/hosts` follows ✔. Two boards get different names
+   (each rootfs has its own machine-id) — but the identity is card-bound, see
+   **F24** and the new stage 1.5 task 8.4.
+3. `du -sm /` = **50 MiB** on the board (55 MiB in `output/target`), `df` 47.6 MiB
+   of 229.9 M; `sdcard.img` = 273 MiB, `zImage` 5.62 MiB — ✔ **recorded**.
+4. `mtdinfo /dev/mtd0`: `erasesize 262144`, `pagesize 4096`, **`oobsize 224`**,
+   **7** partitions (measured — the DTS has 7 nodes, not 8); kernel reports
+   `Micron MT29F8G08ABACAWP, 1024 MiB, SLC, page 4096, OOB 224` ✔.
+   **This value gates stage 2 (F2 confirmed: PMECC_OOB must become 224).**
+5. `lsusb` works ✔ (it warns "unable to initialize usb spec" because `usb.ids` is
+   missing — open item 10.6); a USB stick (`346d:5678`) shows up as `/dev/sda1`
+   (58.6 G) and mounts read-only ✔.
+6. No build-time regressions: `make` completes with the trimmed set (F7 fixed) ✔.
+7. Boot log contains only known-benign messages — classification in LOG 7.12,
+   and `CONFIG_MAGIC_SYSRQ` + `CONFIG_BPF_SYSCALL`/`CONFIG_CGROUP_BPF` removed the
+   two warnings that were ours to fix.
 
 ---
 
@@ -549,9 +586,33 @@ partitions, so `ubimkvol`/`ubirsvol` can resize `/data` in the field.
 2. `RequiresMountsFor=/data` in every unit that writes there.
 3. Keep `/etc` on the rootfs (no `/etc` overlay) — updates must stay predictable.
 
-**Exit criteria:** `/data` is mounted from NAND after a reboot and survives
+### 8.4 Board identity in the EEPROM (new, from F24)
+
+The MAC (and therefore the hostname) currently comes from
+`/etc/machine-id` via systemd-udevd's `MACAddressPolicy=persistent`, so it changes
+whenever the SD card is rewritten — unacceptable for "target the board as
+`medicam-<mac6>`" (section 11) and for field updates. The board has a blank
+24C256 (32 KiB) on I2C0@0x50 exactly for this kind of data.
+
+1. Define a small record at EEPROM offset 0: magic `MCM1`, 1-byte format version,
+   6-byte MAC, 16-byte board serial (ASCII), CRC-8/CRC-16. Everything reads/writes
+   through `/sys/bus/i2c/devices/0-0050/eeprom`.
+2. `usr/local/sbin/medicam-identity.sh` + `medicam-identity.service`
+   (`Before=systemd-networkd.service`, `After=local-fs.target`, ordered before
+   `medicam-hostname.service`): if the record is valid → `ip link set dev eth0
+   address <mac>`; if invalid → generate a locally-administered MAC from the
+   TRNG, write the record, apply it. Idempotent, no rewrite when valid (EEPROM
+   endurance).
+3. Hostname keeps deriving from the MAC → becomes board-bound and survives
+   reflashing. Also `MACAddressPolicy=none` for eth0 (`.link` file) so udev stops
+   overriding it, and the identity unit becomes the single source of truth.
+4. Factory provisioning is out of scope: first boot programs the EEPROM; the
+   desktop script can later overwrite the serial/MAC fields.
+
+**Exit criteria (1.5):** `/data` is mounted from NAND after a reboot and survives
 reflashing the SD rootfs; `/home` resolves into `/data/home`; a 50 MiB write +
-reboot + read-back passes.
+reboot + read-back passes; **the MAC and hostname stay identical across an SD
+rewrite**.
 
 ---
 
