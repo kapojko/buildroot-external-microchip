@@ -612,8 +612,11 @@ whenever the SD card is rewritten — unacceptable for "target the board as
    Implementation: `medicam-identity.sh` + `medicam-identity.service` +
    `etc/systemd/network/10-medicam-eth0.link`, record format
    `MCM1 1 mac=<12hex> serial=<16> crc=<cksum>` (96 bytes at offset 0).
-   Tested on hardware (LOG 7.15); the remaining acceptance test is an SD rewrite
-   keeping the same MAC.
+   Verified on hardware, including the acceptance test: an SD rewrite changed
+   `/etc/machine-id` (21290f5f… → df552997…) and the kernel picked a fresh random
+   MAC, yet the board came back with the same MAC `2a:45:d5:48:db:74` and hostname
+   `medicam-48db74`, with zero EEPROM rewrites (LOG 7.15). The blank-record path
+   works but is only proven manually — test it on a spare board.
 
 **Exit criteria (1.5):** `/data` is mounted from NAND after a reboot and survives
 reflashing the SD rootfs; `/home` resolves into `/data/home`; a 50 MiB write +

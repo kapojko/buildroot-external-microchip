@@ -396,12 +396,21 @@ Conventions
                           shows the record, 32 bytes write path works (at24
                           splits into page writes itself)
         image: sdcard-medicam-stage1c.img, sha256 28ff500e..., 273 MiB / 55 MiB
-        verify after flashing (the EEPROM of this board already holds the record):
-          - boot: MAC 2a:45:d5:48:db:74, hostname medicam-48db74 (unchanged)
-          - rewrite the SD card with the same image and boot again: the MAC must
-            stay the SAME (this is the actual fix - the machine-id changed)
-          - journalctl -b | grep medicam-identity  -> "EEPROM identity ok: ..."
-          - blanking the record (first 96 bytes to 0xFF) must regenerate+reprogram
+        ACCEPTANCE TEST PASSED after flashing stage1c (2026-10-28):
+          - machine-id changed with the new rootfs: 21290f5f... -> df552997...
+          - kernel probe used a fresh random MAC: 02:59:32:82:ab:d3
+          - our unit replaced it: "EEPROM identity ok: mac=2a45d548db74" then
+            "eth0 MAC set to 2a:45:d5:48:db:74" (2 s before networkd brought
+            the link up)
+          - final identity identical to before the reflash: MAC 2a:45:d5:48:db:74,
+            hostname medicam-48db74, DHCP 192.168.3.17, /etc/hosts correct
+          - "EEPROM programmed" count in the journal: 0  (record never rewritten)
+          - udev uses our link file: ID_NET_LINK_FILE=/etc/systemd/network/
+            10-medicam-eth0.link, i.e. MACAddressPolicy=none is effective
+          => the identity is now board-bound and survives SD rewrites (F24 fixed)
+        not yet exercised: the blank-record path (regenerate + reprogram) is
+        implemented and was proven once on the live board, but there is no
+        automated test; do it only on a spare board.
         factory provisioning is out of scope: serial stays 0000000000000000 and
         can be overwritten later by the desktop script (same record).
 
