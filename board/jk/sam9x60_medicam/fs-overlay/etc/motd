@@ -1,0 +1,9 @@
+Welcome to the SAM9X60 MediCam
+==============================
+
+Serial console: 115200 8N1 on the DBGU port.
+SSH:            root@<hostname>  (the hostname is medicam-<6 hex digits of the eth0 MAC>)
+Persistent data: /data (on NAND from stage 1.5), /home is a symlink into it.
+
+The root password is set at build time (BR2_TARGET_GENERIC_ROOT_PASSWD in
+configs/sam9x60_medicam_defconfig) - see README.md in this directory.

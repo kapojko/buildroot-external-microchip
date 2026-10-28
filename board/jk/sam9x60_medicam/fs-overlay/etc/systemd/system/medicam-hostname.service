@@ -1,0 +1,17 @@
+[Unit]
+Description=Set the MediCam hostname from the eth0 MAC address
+Documentation=file:/usr/local/sbin/medicam-hostname.sh
+# Needs the rootfs writable (it rewrites /etc/hostname and /etc/hosts) and must
+# finish before systemd-networkd starts, so the DHCP request, the DHCP lease and
+# the DNS record all carry the final name.
+After=local-fs.target
+Before=systemd-networkd.service network-pre.target
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/medicam-hostname.sh
+
+[Install]
+WantedBy=multi-user.target

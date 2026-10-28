@@ -1,0 +1,12 @@
+# MediCam: units enabled in every image.
+#
+# Buildroot cannot run "systemctl enable" for the target, and git symlinks do not
+# survive the Windows checkout (core.symlinks=false), so enablement is expressed
+# as a preset: Buildroot runs "systemctl --root=<target dir> preset-all" as a
+# rootfs pre-command hook, i.e. after the overlays have been copied.
+#
+# Preset files are applied in file-name order and later files win, so this file
+# (85-) cannot override 90-systemd.preset - it does not mention these units.
+
+enable sshd.service
+enable medicam-hostname.service

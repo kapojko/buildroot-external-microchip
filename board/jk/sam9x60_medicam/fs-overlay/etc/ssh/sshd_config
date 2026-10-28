@@ -1,0 +1,17 @@
+# MediCam: OpenSSH server configuration.
+#
+# The stock Buildroot sshd_config has exactly two active directives
+# (AuthorizedKeysFile and the sftp Subsystem) plus comments; both are kept below.
+# Added here: password login for root, which the desktop upload script relies on.
+#
+# "Include" comes first because sshd keeps the first value it sees for a keyword,
+# so anything in /etc/ssh/sshd_config.d/*.conf overrides what follows.
+
+Include /etc/ssh/sshd_config.d/*.conf
+
+AuthorizedKeysFile	.ssh/authorized_keys
+
+PermitRootLogin yes
+PasswordAuthentication yes
+
+Subsystem	sftp	/usr/libexec/sftp-server
