@@ -1,0 +1,16 @@
+[Unit]
+Description=MediCam persistent /data (NAND UBI volume)
+# medicam-data.service attaches UBI and creates the volume first. The mount
+# unit gets the implicit Before=local-fs.target / After=local-fs-pre.target
+# ordering from being a local mount unit (systemd.mount(5)).
+After=medicam-data.service
+Requires=medicam-data.service
+
+[Mount]
+What=ubi0:data
+Where=/data
+Type=ubifs
+Options=noatime
+
+[Install]
+WantedBy=local-fs.target

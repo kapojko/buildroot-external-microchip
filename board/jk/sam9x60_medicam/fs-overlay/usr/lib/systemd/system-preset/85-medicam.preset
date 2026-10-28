@@ -11,3 +11,6 @@
 enable sshd.service
 enable medicam-identity.service
 enable medicam-hostname.service
+enable medicam-data.service
+enable data.mount
+enable medicam-data-init.service

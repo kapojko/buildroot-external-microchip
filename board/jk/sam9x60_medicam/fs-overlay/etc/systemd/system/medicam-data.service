@@ -1,0 +1,17 @@
+[Unit]
+Description=Prepare the NAND UBI data volume for /data
+Documentation=file:/usr/local/sbin/medicam-data.sh
+# Finds the UBI MTD partition by label, attaches it and creates the "data"
+# volume (rest of the UBI region) on first boot. Must finish before data.mount
+# mounts /data; both are pulled in by local-fs.target.
+After=local-fs-pre.target
+Before=data.mount local-fs.target
+Wants=local-fs-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/medicam-data.sh
+
+[Install]
+WantedBy=local-fs.target

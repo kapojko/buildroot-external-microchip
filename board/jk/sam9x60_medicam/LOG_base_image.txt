@@ -447,29 +447,44 @@ Conventions
           medicam-48db74, EEPROM record unchanged, DHCPv6 still DUID-EN (unused:
           only an IPv6 link-local address exists).
 
-8. STAGE 1.5 - NAND AS /data                                    [ ] not started
+8. STAGE 1.5 - NAND AS /data                                    [ ] 1/2 done (impl)
 --------------------------------------------------------------------------------
-8.1 [ ] chip decision from the measured rootfs size (2/4/8 Gbit, PLAN 8.1)
-8.2 [ ] freeze the layout in DTS + uboot-env + genimage + flash script (PLAN 8.2)
+8.1 [x] chip decision (PLAN 8.1): 4 Gbit ABACA-class = production part, 8 Gbit
+        board = test bed. Same 4K page / 256K block / OOB 224 geometry, so every
+        stage-2 value transfers; only the UBI region size (numpebs) differs.
+        2 Gbit (MT29F2G08ABAEAWP) measured as 2K page / 64 B OOB / 128 K block -
+        a geometry change, not a size change: rejected (PMECC/UBI rework, and
+        not validatable on the 8 Gbit board). Deltas documented in README
+        "NAND layout".
+8.2 [x] freeze the layout in DTS + uboot-env-nand.txt + genimage-nand.cfg +
+        flash-nand.sh (PLAN 8.2). DTS: kernel 8 MiB, ubi partition full die
+        (0xa00000..0x40000000, label "ubi"). Env/genimage/flash committed as
+        frozen stage-2 source (not built by the SD defconfig).
         audit: git grep -n "0x[aA]00000\|numpebs\|mtdparts"
-8.3 [ ] data.mount + medicam-data.service (resolve the UBI MTD by label, ubiattach,
-        ubimkvol/mkfs.ubifs on first boot), RequiresMountsFor=/data
-8.4 [ ] board identity in the EEPROM (F24): magic+version+MAC+serial+CRC at offset 0,
-        medicam-identity.service sets `ip link set dev eth0 address <mac>` before
-        systemd-networkd, MACAddressPolicy=none for eth0; first boot programs the
-        record from the TRNG. Verify: MAC and hostname unchanged after rewriting the SD.
-8.4 [ ] BOARD SESSION 2: /data mounted after reboot, 50 MiB write + reboot + read-back,
-        /home -> /data/home, survives reflashing the SD rootfs
+8.3 [x] /data infra (PLAN 8.3): medicam-data.service + data.mount +
+        medicam-data-init.service + medicam-data.sh. MTD resolved by label
+        ("ubi", never -m 6); ubiattach when absent; ubimkvol at max size
+        (rest of UBI, die-agnostic) on first boot; UBIFS directly (no
+        e2fsprogs). data.mount What=ubi0:data Type=ubifs noatime, enabled via
+        85-medicam.preset; medicam-data-init creates /data/home after mount
+        (mount units have no ExecStartPost - verified in systemd source).
+8.4 [x] board identity in the EEPROM (F24) - implemented and verified, see 7.15.
+8.5 [ ] BOARD SESSION 2: /data mounted after reboot, 50 MiB write + reboot +
+        read-back, /home -> /data/home, survives reflashing the SD rootfs.
+        Needs the stage-1.5 build + SD rewrite first.
 
 --------------------------------------------------------------------------------
 9. STAGE 2 - NAND BOOT                                          [ ] not started
 --------------------------------------------------------------------------------
 9.1 [ ] at91bootstrap PMECC OOB 224 fragment, eccOffset 120 in boot.bin.pmecc header
 9.2 [ ] uboot-nand.fragment (ENV in NAND, offset 0x140000 / redundant 0x100000)
-9.3 [ ] uboot-env-nand.txt (ubi.mtd=<n> root=ubi0:rootfs rootfstype=ubifs, compile-in fallback)
-9.4 [ ] UBIFS/UBI target options (LEB 0x3e000, min-io 0x1000, subpage 0x200, numpebs from 8.2)
-9.5 [ ] genimage-nand.cfg + post-image-pre.sh
-9.6 [ ] flash-nand.sh: nandwrite per raw partition, ubiformat/ubiupdatevol for the UBI region
+9.3 [~] uboot-env-nand.txt committed frozen (PLAN 8.2); needs the NAND defconfig +
+        post-image-pre.sh wiring to be built
+9.4 [ ] UBIFS/UBI target options (LEB 0x3e000, min-io 0x1000, subpage 0x200, numpebs 4056/2024)
+9.5 [~] genimage-nand.cfg committed frozen (8 Gbit geometry, numpebs 4056); needs the
+        NAND defconfig + post-image-pre.sh wiring
+9.6 [~] flash-nand.sh committed frozen (8 Gbit eraseblock counts); to be installed in
+        the rescue SD rootfs by the NAND defconfig
 9.7 [ ] BOARD SESSION 3: SD boot -> flash-nand.sh -> power off -> remove SD -> NAND boot
         10x reboot + 5x power cut, then the SAM-BA recovery path (-d sam9x60d1g)
 
@@ -479,8 +494,8 @@ Conventions
 10.1 [ ] root password: which value, and who rotates it per device (hash only in git)
 10.2 [ ] SD image writer used on the Windows side (balenaEtcher confirmed?)
 10.3 [ ] keep the historical "Buildroot BSP MediCam.md" as-is or fold it into this log?
-10.4 [ ] /home: keep the symlink (one harmless makedevs/tmpfiles message) or bind-mount
-          /data/home onto a real /home with a home.mount unit at stage 1.5?
+10.4 [x] /home: keep the symlink /home -> data/home; /data/home is created on the
+          mounted volume by medicam-data-init.service (decided in stage 1.5)
 10.6 [ ] `lsusb` prints "unable to initialize usb spec" (no /usr/share/hwdata/usb.ids).
           Either add hwdata + usb ids (~1 MiB) for readable device names, or accept.
 10.5 [ ] batch these trims into the stage 1.5 clean rebuild (~7 MiB): set

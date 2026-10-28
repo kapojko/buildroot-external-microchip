@@ -1,0 +1,14 @@
+[Unit]
+Description=Finish /data bring-up (create the /home target)
+# /home -> data/home must resolve into the freshly mounted volume. Mount units
+# have no ExecStartPost, so this tiny oneshot does the post-mount step.
+After=data.mount
+Requires=data.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/mkdir -p /data/home
+
+[Install]
+WantedBy=multi-user.target

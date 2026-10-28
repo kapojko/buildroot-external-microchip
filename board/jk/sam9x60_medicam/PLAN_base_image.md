@@ -1,9 +1,10 @@
 # MediCam base image — implementation plan
 
-Status: **stage 0 and stage 1 done and verified on hardware (2026-10-28).**
-Stage 1.5 (chip decision + NAND `/data` + board identity) is next. Work happens
-session by session on branch `medicam_clean` (created from `medicam`); see the
-working rules in section 0 and the measured log in LOG_base_image.txt.
+Status: **stage 0 and stage 1 done and verified on hardware (2026-10-28). Stage 1.5
+implemented (chip decision, layout freeze, `/data` infra) — board session 2
+(clean build + `/data` on NAND verify) pending.** Work happens session by session
+on branch `medicam_clean` (created from `medicam`); see the working rules in
+section 0 and the measured log in LOG_base_image.txt.
 
 Board: SAM9X60D1G SiP (DDR2 128 MiB in package), 128 MiB RAM, MT29F8G08ABACAWP
 parallel NAND (1 GiB), OV2640 camera on ISI, 24C256 EEPROM @0x50 on I2C0,
@@ -563,7 +564,20 @@ Note: 2 Gbit x8 parts are commonly 2 KiB page / 128 KiB block
 (e.g. MT29F4G08ABACA-class) so DTS, UBI and bootstrap settings are reused
 unchanged.
 
-### 8.2 Freeze the layout in four places
+**Decision (2026-10-28): 4 Gbit ABACA-class = production part, 8 Gbit board =
+test bed.** The production pick MT29F2G08ABAEAWP was measured from the datasheet
+as 2 KiB page / 64 B OOB / 128 KiB block — a geometry change, not a size change
+(PMECC + UBI rework, and not validatable on the 8 Gbit board), so it was
+rejected. 4 Gbit ABACA-class keeps the current 4K/256K/224 geometry: only
+`numpebs` and the DTS `ubi` size differ. Tree targets the 8 Gbit test bed; the
+2G/4G/8G deltas are in README "NAND layout".
+
+### 8.2 Freeze the layout in four places — **[x] frozen 2026-10-28**
+
+DTS kernel = 8 MiB, `ubi` partition = full die (label `ubi`);
+`uboot-env-nand.txt`, `genimage-nand.cfg`, `flash-nand.sh` committed as frozen
+stage-2 source (tree targets the 8 Gbit test bed; 4 Gbit = the three-number
+delta in README).
 
 The same table must appear in: (a) the DTS `partitions`, (b) `uboot-env*.txt`
 `mtdparts`/bootargs, (c) `genimage*.cfg`, (d) `flash-nand.sh`. Minimal-change
@@ -588,7 +602,13 @@ Suggested volumes: `rootfs` (≈ 300 MiB) + `data` (rest) for a single-slot setu
 or `rootfs_a`/`rootfs_b` (150 + 150) + `data` later. Volumes, not extra MTD
 partitions, so `ubimkvol`/`ubirsvol` can resize `/data` in the field.
 
-### 8.3 `/data` mount infrastructure (name-based, layout-agnostic)
+### 8.3 `/data` mount infrastructure (name-based, layout-agnostic) — **[x] implemented 2026-10-28**
+
+`medicam-data.service` + `data.mount` (`What=ubi0:data`, `Type=ubifs`, `noatime`)
++ `medicam-data-init.service` (creates `/data/home` after mount; mount units
+have no `ExecStartPost` — verified) + `medicam-data.sh`. MTD resolved by label,
+`ubiattach` when absent, `ubimkvol` at maximum size (rest of UBI, die-agnostic)
+on first boot. `data` volume only; `rootfs` volume deferred to stage 2.
 
 1. `etc/systemd/system/data.mount` (`What=/dev/ubiblock…` **or** UBIFS on
    `ubi0:data`, `Where=/data`, `Type=ubifs`) plus
