@@ -52,7 +52,7 @@ bootstrap|/dev/mtd0|boot.bin.pmecc|1|raw
 uboot|/dev/mtd1|u-boot-nand.bin|3|raw
 dtb|/dev/mtd4|at91-sam9x60_medicam.dtb|2|raw
 kernel|/dev/mtd5|zImage|32|raw
-rootfs|/dev/mtd6|rootfs.ubifs|4056|ubi
+rootfs|/dev/mtd6|rootfs.ubifs|4056|ubi|rootfs
 "
 
 confirm() {
@@ -119,8 +119,9 @@ write_raw() {
 }
 
 write_ubi() {
-    # $1 = device, $2 = file on $BOOT, $3 = eraseblock count
-    dev=$1; file=$2; cnt=$3
+    # $1 = device, $2 = file on $BOOT, $3 = eraseblock count, $4 = volume name
+    dev=$1; file=$2; cnt=$3; volname=$4
+    mtdn=${dev#/dev/mtd}
     [ -f "$BOOT/$file" ] || die "missing $BOOT/$file"
 
     # The board may have UBI attached to this mtd (the /data volume lives on
@@ -129,7 +130,7 @@ write_ubi() {
     log "Detaching UBI from $dev ..."
     awk '$3 == "ubifs" && $1 ~ /^ubi[0-9]+:/ {print $2}' /proc/self/mounts | \
         while read -r mp; do umount "$mp" 2>/dev/null && log "unmounted $mp"; done
-    if ubidetach -m "${dev#/dev/mtd}" 2>/dev/null; then
+    if ubidetach -m "$mtdn" 2>/dev/null; then
         log "detached ubi from $dev"
     else
         log "no UBI attached to $dev (fine)"
@@ -137,9 +138,30 @@ write_ubi() {
 
     log "Erasing $dev ($cnt x ${EB_KB} KiB)..."
     flash_erase "$dev" 0 "$cnt"
-    log "Formatting $dev as UBI with $BOOT/$file"
-    # -s 512: sub-page size (MT29F8G08 / MT29F4G08 support 512 B sub-pages)
-    ubiformat "$dev" -f "$BOOT/$file" -s 512 -O 2048
+
+    # Empty UBI using the KERNEL geometry (measured in stage 1.5: min-IO 4096,
+    # no sub-pages, LEB 253952 = 256 KiB PEB - 2x4096). Do NOT pass -s/-O: the
+    # frozen sub-page=0x200 assumption does not match this chip and would make
+    # the on-flash layout disagree with what the kernel reads at boot.
+    log "Formatting $dev as empty UBI (kernel geometry)..."
+    ubiformat "$dev" -y
+
+    log "Attaching $dev as ubi0..."
+    ubiattach -m "$mtdn" -d 0
+    for i in 1 2 3 4 5; do [ -e /dev/ubi0 ] && break; sleep 1; done
+    [ -e /dev/ubi0 ] || die "ubi0 did not appear after attach"
+
+    # rootfs volume sized per PLAN 8.2 (~300 MiB; data = rest of the die, created
+    # by medicam-data.service on first NAND boot). LEB size 253952 (0x3e000).
+    LEB=253952
+    vol_lebs=$((300 * 1024 * 1024 / LEB))
+    log "Creating UBI volume '$volname' ($vol_lebs LEBs, ~300 MiB)..."
+    ubimkvol /dev/ubi0 -N "$volname" -S "$vol_lebs"
+    for i in 1 2 3 4 5; do [ -e /dev/ubi0_0 ] && break; sleep 1; done
+    [ -e /dev/ubi0_0 ] || die "ubi0_0 did not appear after ubimkvol"
+
+    log "Writing $BOOT/$file -> /dev/ubi0_0..."
+    ubiupdatevol /dev/ubi0_0 "$BOOT/$file"
 }
 
 flash_partition() {
@@ -147,13 +169,13 @@ flash_partition() {
     line=$(printf '%s\n' "$PARTITIONS" | grep -E "^$name[|]" || true)
     [ -n "$line" ] || die "unknown partition: $name (known: all, $(printf '%s\n' "$PARTITIONS" | cut -d'|' -f1 | tr '\n' ' '))"
 
-    IFS='|' read -r _ dev file cnt kind <<EOF
+    IFS='|' read -r _ dev file cnt kind volname <<EOF
 $line
 EOF
 
     case "$kind" in
         raw) write_raw "$dev" "$file" "$cnt" ;;
-        ubi) write_ubi "$dev" "$file" "$cnt" ;;
+        ubi) write_ubi "$dev" "$file" "$cnt" "$volname" ;;
         *)   die "unknown kind '$kind' for $name" ;;
     esac
 }
