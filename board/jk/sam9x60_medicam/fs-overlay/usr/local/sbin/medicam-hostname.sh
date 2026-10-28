@@ -18,7 +18,7 @@ NAME=""
 if [ -r /sys/class/net/eth0/address ]; then
 	mac="$(tr -d ':\n' < /sys/class/net/eth0/address)"
 	if [ "${#mac}" -eq 12 ]; then
-		NAME="medicam-${mac#??????????}"
+		NAME="medicam-${mac#??????}"
 	fi
 fi
 

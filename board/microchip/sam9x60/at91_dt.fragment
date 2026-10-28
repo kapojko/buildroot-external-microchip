@@ -31,6 +31,19 @@ CONFIG_TMPFS_POSIX_ACL=y
 # purpose (see plan F10: no conntrack in this kernel, so no stateful rules).
 CONFIG_SYN_COOKIES=y
 
+# Debugging: SysRq over the serial console. Without it systemd's
+# /usr/lib/sysctl.d/50-default.conf fails at boot with
+#   "Couldn't write '16' to 'kernel/sysrq', ignoring: No such file or directory"
+# and a hung board cannot be inspected (useful for the stage 2 power-cut tests).
+CONFIG_MAGIC_SYSRQ=y
+
+# BPF + cgroup firewalling: systemd units declare IP firewall rules, and without
+# it journald logs "unit configures an IP firewall, but the local system does
+# not support BPF/cgroup firewalling" on every boot (and no firewall could ever
+# work - plan F10).
+CONFIG_BPF_SYSCALL=y
+CONFIG_CGROUP_BPF=y
+
 # USB gadget: ECM is available for a configfs-based network on the DEBUG port
 # (plan F20, not used yet). The webcam gadget is not needed - the camera path is
 # ISI + OV2640.
