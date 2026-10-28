@@ -15,6 +15,55 @@ fixed here (section 11).
 
 ---
 
+## 0. Working rules (binding for every stage, including future sessions)
+
+**R1 — full rebuilds are run by the user, not by the agent.**
+A full build takes ≥ 1 h and downloads packages from the network. The agent therefore:
+
+* prepares and statically verifies every file/defconfig change;
+* **may** run: `<defconfig>` selection, `make <pkg>-rebuild`, `make <pkg>-dirclean`,
+  `make linux-rebuild`, and any read-only inspection of `output/` (`grep`, `ls`, `du`, `size`);
+* **must not** run a full `make` (or `make clean`/`defclean` + build) inside a piped/tailed tool
+  call — a network outage or a failing package download has to stay visible to the user so it can
+  be fixed and the build resumed;
+* hands over the exact command plus the expected completion signal, and waits for the user's
+  paste of the tail, or of `~/src/build-<stage>.log`.
+
+Suggested user command: `cd ~/src/buildroot-mchp && make -j$(nproc) 2>&1 | tee ~/src/build-<stage>.log`.
+
+**R2 — the build log is a deliverable of every stage.**
+`board/jk/sam9x60_medicam/LOG_base_image.txt` records every reproducible step:
+host preparation, commands, files touched, observed numbers. Style:
+
+* numbered steps, one action per line, `DONE` / `TODO` / `FAILED` marker per step; no prose;
+* commands copy-pasteable as-is, measured values inline (`rootfs=110 MiB`);
+* updated in the **same commit** as the stage it documents — a stage is not done before its log
+  lines exist;
+* device-specific values (MAC, NAND OOB, die size) are always *measured and recorded*, never
+  assumed, so the log replays on a different board.
+
+**R3 — builds happen only in the WSL checkout, never on the Windows one.**
+WSL inherits the Windows `PATH` (Windows `make`/`gcc`/`find` shadow the Linux ones) unless
+`[interop] appendWindowsPath = false` is set in `/etc/wsl.conf`. From the Windows side the MSYS
+layer rewrites unix-looking arguments; call WSL as
+`wsl -d Debian -- bash -lc '<single-quoted command>'` (`MSYS_NO_PATHCONV=1` when an argument must
+reach Linux verbatim). Long tool calls that hang are usually this, not the build.
+
+**R4 — hardware sessions are explicit, and cheap.**
+The board is only needed at the points listed below; everything before them is off-target work,
+so no session should block on hardware.
+
+| Board session | When | Needed for |
+|---|---|---|
+| 1 | end of stage 1 (task 1.11) | boot the trimmed SD image, serial + SSH login, `mtdinfo` geometry (**gates stage 2**), USB smoke test |
+| 2 | end of stage 1.5 | `/data` on NAND from the SD boot, write/reboot/read-back, `/home` symlink |
+| 3 | stage 2 | NAND boot attempt, power-cut matrix |
+
+Per session, have ready: DBGU UART at 115200 8N1, Ethernet with DHCP/DNS, a written SD card
+(balenaEtcher or `dd`), and a power switch that can cut power cleanly.
+
+---
+
 ## 1. Scope
 
 | In scope | Out of scope |
@@ -31,8 +80,8 @@ fixed here (section 11).
 | Checkout | State |
 |---|---|
 | Windows `D:/Source/buildroot-external-microchip` | branch `medicam` @ `07a8c2b` (trusted, boots) |
-| WSL `~/src/buildroot-external-microchip` | **detached, content of `medicam_nand` (`b5443b5`)** — must be reset |
-| WSL `~/src/buildroot-mchp` (buildroot main tree) | `linux4microchip-2025.04`, `.config` built from `sam9x60_medicam_nand_defconfig`, last build 2026-07-27 |
+| WSL `~/src/buildroot-external-microchip` | **not detached**: a local branch *literally named* `origin/medicam` @ `b5443b5` (content of `medicam_nand`), tree clean; no `origin/medicam_clean` ref yet; has a `local` remote → `/mnt/d/Source/buildroot-external-microchip` (fetch the Windows checkout directly) — must be reset |
+| WSL `~/src/buildroot-mchp` (buildroot main tree) | `linux4microchip-2025.04`, `.config` built from `sam9x60_medicam_nand_defconfig` (`BR2_DEFCONFIG` still points there), last build 2026-07-27; `output/images/` still holds NAND-variant artifacts — re-select `sam9x60_medicam_defconfig` before stage 1 and do not mistake those files for stage 1 results |
 
 Branch roles:
 
@@ -234,10 +283,19 @@ more than one board on a LAN. → unique hostname per board at first boot
 **F17 — the WSL checkout currently contains the untrusted branch content** and
 would silently build the wrong tree. → **stage 0**.
 
-**F18 — CRLF hazard.** The Windows checkout has `core.autocrlf=true` and there is
-no `.gitattributes` on `medicam`. The `medicam_nand` branch added one that pins
-`*.sh` (+x), `*.dts`, `*.fragment`, `*_defconfig` to LF. Port it in **stage 0** —
-a CRLF `*.fragment` or `*.sh` silently breaks kconfig parsing / script execution.
+**F18 — CRLF / exec-bit hazard (measured, not assumed).** The Windows checkout
+uses `core.autocrlf=true`, so the *working tree* there is CRLF while the *blobs*
+are LF. Measured: `git grep -Il -F -e $'' HEAD -- .` → **0 files**, i.e. the
+repository content is LF-clean and no renormalisation is needed; the CRLF seen in
+`at91-sam9x60_medicam.dts`, `genimage.cfg`, `uboot-env.txt`,
+`board/microchip/sam9x60/at91_dt.fragment` and `board/microchip/at91/post_build.sh`
+is checkout-only (`tr -cd '' < file | wc -c` → 543/17/25 on the Windows tree,
+0 in the index). The real hazards are therefore (a) files **created** on the
+Windows side with a tool that bypasses git's filters, and (b) **lost +x bits**.
+`medicam` has no `.gitattributes`; `medicam_nand` added one pinning `*.sh` (+x),
+`*.dts`, `*.fragment`, `*_defconfig` to LF. Port it in **stage 0** (extended to the
+`*.service`/`*.mount`/`*.preset`/`*.cfg` files stage 1 adds) and keep the audit
+`git ls-files -s -- '*.sh' | awk '$1=="100644"{print "not exec:",$4}'` empty.
 
 **F19 — U-Boot/partition margin is thin.** `u-boot.bin` is 580 184 B in a 768 KiB
 partition; `zImage` is 5.6 MiB. The `medicam` DTS allots only 6 MiB to the kernel
@@ -280,10 +338,18 @@ partitions + `ubiformat`/`ubiupdatevol` for the rootfs volume).
 
 ## 6. Stage 0 — workspace hygiene (≈30 min)
 
-1. `git checkout -B medicam_clean medicam` in **both** checkouts; verify both at
-   the same HEAD (`git rev-parse HEAD`).
-2. Reset the WSL checkout (currently detached with `medicam_nand` content):
-   `git fetch --all && git checkout -B medicam_clean origin/medicam`.
+Verified state before this stage: the Windows checkout is **already** on
+`medicam_clean` @ `a02b79a` (plan committed), tree clean, equal to
+`origin/medicam_clean`. Only the WSL side needs work.
+
+1. Windows: nothing to do (`git rev-parse HEAD` = `a02b79a...`, `git status` clean).
+2. Reset the WSL checkout (on the mis-named branch `origin/medicam` @ `b5443b5`):
+   `git fetch --all --prune` (or `git fetch local`) ->
+   `git checkout -B medicam_clean origin/medicam_clean` (offline alternative:
+   `local/medicam_clean`) -> `git branch -D 'origin/medicam'` to drop the name that
+   collides with the remote-tracking ref. Verify `git rev-parse HEAD` equals the
+   Windows one and `git status --porcelain` is empty. `medicam_nand` stays a local
+   branch - its content is what step 4 ports from.
 3. Port `.gitattributes` from `medicam_nand` (see F18) as a separate commit.
 4. Do **not** merge `medicam_nand`. Port list, reviewed file by file, later:
    `at91bootstrap_nand.fragment`, `uboot-nand.fragment`, `uboot-env-nand.txt`,
@@ -307,11 +373,11 @@ password, and contains all infrastructure needed by later stages.
 | 1.3 | Wire the board overlay: add `$(BR2_EXTERNAL_MCHP_PATH)/board/jk/sam9x60_medicam/fs-overlay/` to `BR2_ROOTFS_OVERLAY` and create the tree | defconfig + overlay |
 | 1.4 | Overlay: `etc/ssh/sshd_config` (add `Include /etc/ssh/sshd_config.d/*.conf`, `PermitRootLogin yes`, `PasswordAuthentication yes`); `etc/systemd/system/multi-user.target.wants/sshd.service` → `/usr/lib/systemd/system/sshd.service`; `etc/motd`; `etc/systemd/journald.conf` (`Storage=volatile`); `data/` directory; `home` → `data/home` symlink | overlay |
 | 1.5 | Overlay: `usr/local/sbin/medicam-hostname.sh` + `etc/systemd/system/medicam-hostname.service` — `Type=oneshot`, `RemainAfterExit=yes`, `After=local-fs.target`, `Before=systemd-networkd.service`; derives `medicam-<6 hex>` from `/sys/class/net/eth0/address`, writes `/etc/hostname`, calls `hostname`; falls back to 6 chars of `/etc/machine-id` when no MAC | overlay |
-| 1.6 | Root password: `BR2_TARGET_GENERIC_ROOT_PASSWD` = crypt hash (store the hash only); `BR2_TARGET_ENABLE_ROOT_LOGIN=y` | defconfig |
+| 1.6 | Root password: `BR2_TARGET_ENABLE_ROOT_LOGIN=y` + `BR2_TARGET_GENERIC_ROOT_PASSWD` = a `$6$` crypt hash (store the hash only). **Each `$` must be doubled** (`$$6$$...`), otherwise make expands it and the value silently becomes a cleartext password; the hash must start with `$1$`/`$5$`/`$6$` (`openssl passwd -6 ...`) or Buildroot treats it as plaintext. It ends up in `.config`, the defconfig and the build log | defconfig |
 | 1.7 | **Fix `board/microchip/sam9x60/at91_dt.fragment`**: strip the `+` prefixes. Keep the intended content (`OVERLAY_FS`, `NAMESPACES`, cgroup set, `EXT4_FS_POSIX_ACL`, `TMPFS_POSIX_ACL`, `SYN_COOKIES`); leave netfilter decisions out | fragment file |
 | 1.8 | DTS: add `&trng { status = "okay"; };` | `board/jk/sam9x60_medicam/at91-sam9x60_medicam.dts` |
 | 1.9 | **Guard `board/microchip/at91/post_build.sh`**: wrap the `mv dhcpd.service` / `rm wpa_supplicant.service` steps in existence checks (`[ -f … ] `) so a trimmed package set does not fail the build | `board/microchip/at91/post_build.sh` |
-| 1.10 | Additions: `BR2_PACKAGE_UTIL_LINUX_RFKILL=y`, `BR2_PACKAGE_LINUX_FIRMWARE=y` + `BR2_PACKAGE_LINUX_FIRMWARE_RALINK_RT2XX=y`, `BR2_PACKAGE_WGET=y` | defconfig |
+| 1.10 | Additions: `BR2_PACKAGE_UTIL_LINUX_RFKILL=y`, `BR2_PACKAGE_LINUX_FIRMWARE=y` + `BR2_PACKAGE_LINUX_FIRMWARE_RALINK_RT2XX=y` (all three symbols confirmed present in buildroot 2025.02); `BR2_PACKAGE_WGET=y` is **already** in the defconfig (F15 satisfied) | defconfig |
 | 1.11 | Build, flash, verify (section 12), record numbers (rootfs MiB, `sdcard.img` MiB, `mtdinfo` geometry) | — |
 
 Suggested commit granularity (one concern per commit):

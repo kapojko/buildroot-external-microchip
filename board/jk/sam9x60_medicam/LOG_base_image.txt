@@ -1,0 +1,268 @@
+MEDICAM BASE IMAGE - REPRODUCIBLE BUILD / VERIFY LOG
+====================================================
+Companion to PLAN_base_image.md (same stage numbering, see PLAN section 0 R1/R2).
+Target: SAM9X60D1G SiP (128 MiB DDR2 in package), MT29F8G08ABACAWP 1 GiB NAND,
+        OV2640 on ISI, 24C256 @0x50 on I2C0, WS2812 on SPI1, 2x USART, RMII, USB host+device.
+Host:   Windows 10/11 checkout (edit/commit) + WSL2 Debian (build) + board.
+Supersedes the earlier notes in "Buildroot BSP MediCam.md" (kept for history).
+Pinout reference: "Curiosity vs Medicam Pinout.md".
+
+Conventions
+  [x] done   [ ] todo   [!] failed/blocked   <...> measured value, fill in on the board
+  Every command is copy-pasteable. Session date is recorded per block.
+
+--------------------------------------------------------------------------------
+1. HOST PREPARATION
+--------------------------------------------------------------------------------
+1.1 [x] (historical, VirtualBox path - only if WSL is unavailable)
+        - install debian-12.11.0-amd64-DVD-1.iso, user yury, automatic install
+        - su -; /sbin/usermod -aG sudo yury; re-login
+        - /etc/apt/sources.list: comment out cdrom, add
+            deb https://deb.debian.org/debian bookworm main non-free-firmware
+            deb https://security.debian.org/debian-security bookworm-security main non-free-firmware
+            deb https://deb.debian.org/debian bookworm-updates main non-free-firmware
+        - sudo apt update
+
+1.2 [ ] (current: WSL2 Debian) isolate the Linux PATH from the Windows PATH
+        why: Windows PATH is appended to the WSL PATH (/mnt/c/WINDOWS/system32,
+             .../Git/usr/bin, .../Go/bin ...), so Windows make/gcc/find/python shadow
+             the Linux ones and the build fails in confusing ways.
+        sudo tee /etc/wsl.conf >/dev/null <<'EOF'
+        [interop]
+        appendWindowsPath = false
+        EOF
+        # from PowerShell: wsl --shutdown   then reopen the Debian shell
+        verify: printenv PATH | tr ':' '\n' | grep -c /mnt/c      -> 0
+        verify: which make gcc python3                            -> /usr/bin/*
+        note:   still reach the Windows tree via /mnt/d/Source/...
+
+1.3 [ ] apt packages
+        sudo apt install -y git gitk meld which sed make binutils build-essential \
+             diffutils gcc g++ bash patch gzip bzip2 perl tar cpio unzip rsync file \
+             bc findutils libssl-dev libncurses-dev wget ca-certificates
+        optional: gh (https://github.com/cli/cli/blob/trunk/docs/install_linux.md)
+        note: mkpasswd is NOT installed by the above; use openssl passwd -6 for hashes.
+
+1.4 [x] git identity
+        git config --global user.name "Yuriy Kapoyko"
+        git config --global user.email "yury.kapoyko@gmail.com"
+
+1.5 [ ] host quirk when driving WSL from the Windows shell
+        - MSYS/git-bash rewrites unix-looking arguments (/etc/x -> C:/Program Files/Git/etc/x)
+        - always use:  wsl -d Debian -- bash -lc '<command>'
+        - or prefix the single command with MSYS_NO_PATHCONV=1
+        - symptom of a violation: a Linux command reporting a C:/... path, or a tool call
+          that hangs waiting on stdin.
+
+--------------------------------------------------------------------------------
+2. SOURCES AND BRANCHES
+--------------------------------------------------------------------------------
+2.1 [x] buildroot main tree (build host)
+        git clone https://github.com/linux4microchip/buildroot-mchp.git ~/src/buildroot-mchp
+        cd ~/src/buildroot-mchp && git checkout linux4microchip-2025.04
+        version: buildroot 2025.02 + Microchip layer
+
+2.2 [x] external tree
+        gh repo clone kapojko/buildroot-external-microchip ~/src/buildroot-external-microchip
+        (or git clone https://github.com/kapojko/buildroot-external-microchip.git)
+        branches: medicam (SD, boots) / medicam_nand (untrusted reference) / medicam_clean (work)
+
+2.3 [ ] Windows checkout is the editing side, WSL checkout is the building side:
+        - Windows  D:/Source/buildroot-external-microchip
+        - WSL      ~/src/buildroot-external-microchip
+        - WSL has a "local" remote -> /mnt/d/Source/buildroot-external-microchip,
+          so it can fetch the Windows repo without GitHub:  git fetch local
+
+2.4 [ ] line endings: .gitattributes must pin *.sh (+x), *.dts, *.fragment, *_defconfig
+        to LF (ported from medicam_nand in stage 0, task 0.3).
+        audit: git ls-files -s -- '*.sh' | awk '$1=="100644"{print "not exec:",$4}'
+
+--------------------------------------------------------------------------------
+3. BUILD  (R1: full builds are run by the USER, agent prepares and inspects only)
+--------------------------------------------------------------------------------
+3.1 [x] historical command (from the first working build)
+        cd ~/src/buildroot-mchp
+        BR2_EXTERNAL=../buildroot-external-microchip/ make sam9x60_medicam_defconfig
+        BR2_EXTERNAL=../buildroot-external-microchip/ make -j 2
+        (BR2_EXTERNAL can also stay unset if the tree was configured with it once;
+         check: grep BR2_EXTERNAL_MCHP_PATH .config)
+
+3.2 [ ] current command (12 cores / 15 GiB WSL as measured)
+        cd ~/src/buildroot-mchp
+        make BR2_EXTERNAL=../buildroot-external-microchip sam9x60_medicam_defconfig
+        make BR2_EXTERNAL=../buildroot-external-microchip -j$(nproc) 2>&1 | tee ~/src/build-stage1.log
+        expect: no error, then "Executing post-image script", then images in output/
+        record: build wall time <...>, ccache hit rate (BR2_CCACHE=y is set)
+
+3.3 [ ] partial rebuilds (agent may run these)
+        make linux-rebuild          # kernel + modules + dtb only
+        make <pkg>-rebuild          # e.g. openssh-rebuild
+        make <pkg>-dirclean <pkg>   # clean re-extract of one package
+        make clean    / make defclean   -> full rebuild, user only
+
+3.4 [ ] build result check (no build needed)
+        ls -l output/images/{sdcard.img,rootfs.ext4,boot.vfat,zImage,u-boot.bin}
+        du -sm output/target
+        baseline before trim (medicam, 2026-07): target=211 MiB, rootfs content=221 MiB,
+                                                sdcard.img=529 MiB, u-boot.bin=580184 B
+        stage 1 target:                          target~110-115 MiB, sdcard.img~273 MiB
+
+--------------------------------------------------------------------------------
+4. FLASH AND CONSOLE
+--------------------------------------------------------------------------------
+4.1 [x] flashing the SD card
+        Windows: balenaEtcher -> output/images/sdcard.img
+        Linux:   sudo dd if=output/images/sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress
+        note: image layout = 1 MiB offset, 16 MiB boot.vfat (zImage, dtb, boot.bin, u-boot.bin,
+              uboot.env), rootfs ext4 partition.
+
+4.2 [x] console
+        DBGU UART: 115200 8N1 (PA9/PA10, ttyS0), 3.3 V USB-serial adapter
+        boot chain to watch: RomBOOT -> AT91Bootstrap 4.0.11 -> U-Boot -> kernel -> systemd
+        U-Boot env is taken from boot.vfat/uboot.env (built from uboot-env.txt).
+
+4.3 [ ] SWD/JTAG: not used, no recovery needed for SD boots (NAND recovery = SAM-BA, stage 2)
+
+--------------------------------------------------------------------------------
+5. ON-TARGET SMOKE TESTS  (inherited from the first working image)
+--------------------------------------------------------------------------------
+5.1 [x] SSH
+        passwd root                                     # sets the password once
+        nano /etc/ssh/sshd_config: PermitRootLogin yes / PasswordAuthentication yes
+        killall -HUP sshd
+        NOTE: from stage 1 on this is shipped by the rootfs overlay - do not patch by hand.
+
+5.2 [x] LED / button / GPIO
+        cd /sys/class/leds/INFO; echo none > trigger; echo 1 > brightness; echo 0 > brightness
+        evtest                                            # press the user button
+        gpiodetect; gpioinfo
+        gpioset gpiochip0 31=1                            # PA31 LED on
+        gpioget gpiochip0 30                              # PA30 button
+
+5.3 [x] I2C
+        i2cdetect -l
+        i2cdetect -y 0                                    # 0x50 EEPROM, 0x30 OV2640
+        i2cdump -y 0 0x50
+        dmesg | grep at24 ; ls /sys/bus/i2c/devices/0-0050/eeprom
+        dd if=/sys/bus/i2c/devices/0-0050/eeprom bs=1 count=32768 | hexdump -C
+        echo -n -e '\xAA' | dd of=/sys/bus/i2c/devices/0-0050/eeprom bs=1 count=1 seek=0
+
+5.4 [x] SPI / WS2812
+        echo -n -e '\x9F' | spidev_test -D /dev/spidev1.0 -v      # needs spidev_test (linux-tools)
+        spi_xfer -v -s 3200000 -d '\xFF\x00\x00' /dev/spidev1.0   # GRB green
+        spi_xfer -v -s 3200000 -d '\x00\xFF\x00' /dev/spidev1.0   # GRB red
+
+5.5 [x] USART / RS485
+        dmesg | grep tty                                  # ttyS2, ttyS5
+        stty -F /dev/ttyS2 115200; echo Hello > /dev/ttyS2; cat /dev/ttyS2
+        screen /dev/ttyS2 115200
+        stty -F /dev/ttyS5 115200
+        gpioset gpiochip0 29=1 23=0 ; echo "Hello RS485" > /dev/ttyS5 ; sleep 0.1
+        gpioset gpiochip0 29=0 23=1
+
+5.6 [x] camera OV2640
+        i2cdetect -y 0                                    # expect 0x30
+        v4l2grab -d /dev/video0 -o test.jpg -W 320 -H 240 -q 85
+        v4l2grab -d /dev/video0 -o full.jpg -W 1600 -H 1200
+        NOTE: v4l2-ctl / media-ctl / fswebcam come from v4l-utils & friends, which are
+              NOT in the trimmed image; only v4l2grab is kept (stage 1 decision).
+
+--------------------------------------------------------------------------------
+6. STAGE 0 - WORKSPACE HYGIENE                                  [ ] in progress
+--------------------------------------------------------------------------------
+6.1 [x] Windows checkout: branch medicam_clean @ a02b79a, tree clean, == origin/medicam_clean
+        git rev-parse HEAD
+6.2 [ ] WSL checkout reset (was: local branch named 'origin/medicam' @ b5443b5 = medicam_nand)
+        cd ~/src/buildroot-external-microchip
+        git fetch --all --prune          # or: git fetch local
+        git checkout -B medicam_clean origin/medicam_clean
+        git branch -D 'origin/medicam'   # remove the name that shadows the remote-tracking ref
+        git rev-parse HEAD               # must equal the Windows HEAD (a02b79a...)
+        git status --porcelain           # empty
+6.3 [ ] port .gitattributes from medicam_nand, commit separately
+        git show medicam_nand:.gitattributes > .gitattributes
+        git add .gitattributes && git commit -m "build: pin LF endings and +x for scripts/fragments"
+        git ls-files -s -- '*.sh' | awk '$1=="100644"{print "not exec:",$4}'   # empty
+6.4 [x] line-ending audit - MEASURED: repository blobs are LF-clean, nothing to renormalise
+        git grep -Il -F -e $'\r' HEAD -- . | wc -l                  -> 0
+        tr -cd '\r' < board/microchip/at91/post_build.sh | wc -c   -> 17
+        (the 17 are checkout CRLF only, from core.autocrlf=true; the index blob has 0)
+        keep auditing files created later: git grep -Il -F -e $'\r' -- <new paths>
+6.5 [ ] do NOT merge medicam_nand; only these files are ported later, after review:
+        at91bootstrap_nand.fragment, uboot-nand.fragment, uboot-env-nand.txt,
+        genimage-nand.cfg, post-image-pre.sh, flash-nand.sh, README_Medicam.md
+
+  exit: both checkouts on medicam_clean, same commit, clean tree, .gitattributes in place.
+
+--------------------------------------------------------------------------------
+7. STAGE 1 - LEAN SD IMAGE                                      [ ] not started
+--------------------------------------------------------------------------------
+7.1 [ ] defconfig: package manifest per PLAN 7.3 (drop python/vim/gdb/curiosity glue/wifi-AP/BT)
+7.2 [ ] defconfig: BR2_TARGET_ROOTFS_EXT2_SIZE="256M"
+        disable BR2_PACKAGE_SYSTEMD_HWDB, BR2_PACKAGE_DT_OVERLAY_MCHP (+FIT), keep tzdata/UTC
+7.3 [ ] defconfig: BR2_ROOTFS_OVERLAY += board/jk/sam9x60_medicam/fs-overlay/
+7.4 [ ] overlay: etc/ssh/sshd_config (+Include, PermitRootLogin yes, PasswordAuthentication yes),
+        etc/systemd/system/multi-user.target.wants/sshd.service symlink, etc/motd,
+        etc/systemd/journald.conf (Storage=volatile), data/, home -> data/home
+7.5 [ ] overlay: usr/local/sbin/medicam-hostname.sh + medicam-hostname.service
+        (oneshot, After=local-fs.target, Before=systemd-networkd.service,
+         medicam-<6 hex of eth0 MAC>, fallback = 6 chars of /etc/machine-id)
+        verify on target: hostname; cat /etc/hostname; ip -4 addr show eth0
+7.6 [ ] defconfig: root password hash, '$' doubled
+        HASH=$(openssl passwd -6 -salt medicam <password>); echo "$HASH" | sed 's/\$/$$/g'
+        BR2_TARGET_ENABLE_ROOT_LOGIN=y
+        BR2_TARGET_GENERIC_ROOT_PASSWD="<doubled hash>"
+        verify on target: getent shadow root | cut -d: -f2   -> starts with $6$
+                          and login on the serial console asks for a password
+7.7 [ ] kernel: strip the '+' prefixes from board/microchip/sam9x60/at91_dt.fragment
+        before/after: grep -E 'OVERLAY_FS|NAMESPACES|EXT4_FS_POSIX_ACL' output/build/linux-custom/.config
+        expect: =y after the fix (was "is not set")
+7.8 [ ] dts: add &trng { status = "okay"; };  (see F9, needed by ssh-keygen -A)
+        verify: dmesg | grep -i trng ; cat /sys/class/misc/hwrng/dev
+7.9 [ ] build: guard board/microchip/at91/post_build.sh (existence checks around dhcpd/wpa_supplicant)
+7.10 [ ] defconfig additions: UTIL_LINUX_RFKILL, LINUX_FIRMWARE + RALINK_RT2XX (WGET already set)
+7.11 [ ] build  -> USER runs the command from 3.2, pastes the tail / log name
+7.12 [ ] BOARD SESSION 1 (no SD in the card reader of the PC, card written from output/images/sdcard.img)
+        - serial login asks for the root password                        [ ]
+        - ssh root@medicam-xxxxxx with the password                      [ ]
+        - systemctl is-active sshd                                       -> active
+        - hostname                                                       -> medicam-xxxxxx
+        - du -sm /                                                       -> <...> MiB
+        - ls /data ; ls -l /home                                         -> home -> data/home
+        - mtdinfo /dev/mtd0   -> erasesize 262144, pagesize 4096, oobsize <224?>   GATES STAGE 2
+        - cat /proc/mtd ; dmesg | grep -iE 'nand|pmecc'                   [ ]
+        - rfkill list ; iw dev ; (RT5370 plugged) iw dev                 -> wlan0
+        - lsusb ; mount a USB stick                                      [ ]
+        - ldc / v4l2grab to /data (sanity, camera untouched)             [ ]
+        record the numbers into 3.4 and into PLAN section 3.2
+  exit: PLAN 7.4 criteria 1-6 met, measurements recorded.
+
+--------------------------------------------------------------------------------
+8. STAGE 1.5 - NAND AS /data                                    [ ] not started
+--------------------------------------------------------------------------------
+8.1 [ ] chip decision from the measured rootfs size (2/4/8 Gbit, PLAN 8.1)
+8.2 [ ] freeze the layout in DTS + uboot-env + genimage + flash script (PLAN 8.2)
+        audit: git grep -n "0x[aA]00000\|numpebs\|mtdparts"
+8.3 [ ] data.mount + medicam-data.service (resolve the UBI MTD by label, ubiattach,
+        ubimkvol/mkfs.ubifs on first boot), RequiresMountsFor=/data
+8.4 [ ] BOARD SESSION 2: /data mounted after reboot, 50 MiB write + reboot + read-back,
+        /home -> /data/home, survives reflashing the SD rootfs
+
+--------------------------------------------------------------------------------
+9. STAGE 2 - NAND BOOT                                          [ ] not started
+--------------------------------------------------------------------------------
+9.1 [ ] at91bootstrap PMECC OOB 224 fragment, eccOffset 120 in boot.bin.pmecc header
+9.2 [ ] uboot-nand.fragment (ENV in NAND, offset 0x140000 / redundant 0x100000)
+9.3 [ ] uboot-env-nand.txt (ubi.mtd=<n> root=ubi0:rootfs rootfstype=ubifs, compile-in fallback)
+9.4 [ ] UBIFS/UBI target options (LEB 0x3e000, min-io 0x1000, subpage 0x200, numpebs from 8.2)
+9.5 [ ] genimage-nand.cfg + post-image-pre.sh
+9.6 [ ] flash-nand.sh: nandwrite per raw partition, ubiformat/ubiupdatevol for the UBI region
+9.7 [ ] BOARD SESSION 3: SD boot -> flash-nand.sh -> power off -> remove SD -> NAND boot
+        10x reboot + 5x power cut, then the SAM-BA recovery path (-d sam9x60d1g)
+
+--------------------------------------------------------------------------------
+10. OPEN ITEMS / PENDING DECISIONS
+--------------------------------------------------------------------------------
+10.1 [ ] root password: which value, and who rotates it per device (hash only in git)
+10.2 [ ] SD image writer used on the Windows side (balenaEtcher confirmed?)
+10.3 [ ] keep the historical "Buildroot BSP MediCam.md" as-is or fold it into this log?
