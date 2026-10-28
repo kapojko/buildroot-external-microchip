@@ -541,3 +541,10 @@
 &watchdog {
 	status = "okay";
 };
+
+/* True RNG: sshd creates its host keys on first start (ssh-keygen -A), which
+ * stalls on entropy without this.
+ */
+&trng {
+	status = "okay";
+};
