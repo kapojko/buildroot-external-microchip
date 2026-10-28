@@ -469,9 +469,16 @@ Conventions
         85-medicam.preset; medicam-data-init creates /data/home after mount
         (mount units have no ExecStartPost - verified in systemd source).
 8.4 [x] board identity in the EEPROM (F24) - implemented and verified, see 7.15.
-8.5 [ ] BOARD SESSION 2: /data mounted after reboot, 50 MiB write + reboot +
-        read-back, /home -> /data/home, survives reflashing the SD rootfs.
-        Needs the stage-1.5 build + SD rewrite first.
+8.5 [~] BOARD SESSION 2 (first attempt): boot OK, identity OK (medicam-48db74 /
+        2a:45:d5:48:db:74 / 192.168.3.17). FAILED at medicam-data.service:
+        "ubimkvol: error!: volume size was not specified". ubiattach worked
+        (ubi0 on mtd6, 4052 good PEBs, 3970 available, LEB 253952).
+        FIX: ubimkvol 2.2.1 needs an explicit size - use -m/--maxavsize (no
+        parsing). Validated on the board with a throwaway volume: ubimkvol -m ->
+        3970 LEBs (961.4 MiB), UBIFS auto-formats on mount, write+read-back OK,
+        ubirmvol -> NAND clean again. Rootfs image rebuilt with the -m fix.
+8.5 [ ] BOARD SESSION 2 (re-run): /data mounted after reboot, 50 MiB write +
+        reboot + read-back, /home -> /data/home, survives reflashing the SD rootfs.
 
 --------------------------------------------------------------------------------
 9. STAGE 2 - NAND BOOT                                          [ ] not started

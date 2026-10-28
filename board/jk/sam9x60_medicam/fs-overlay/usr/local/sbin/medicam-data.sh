@@ -44,7 +44,9 @@ fi
 if ubinfo /dev/ubi0 -N data >/dev/null 2>&1; then
 	log "UBI volume 'data' already present"
 else
-	# No -s: ubimkvol sizes the volume to the maximum available (rest of UBI).
-	ubimkvol /dev/ubi0 -N data || { log "ubimkvol 'data' FAILED"; exit 1; }
+	# -m = maximum available size (rest of the UBI region); die-agnostic.
+	# (ubimkvol 2.2.1 requires an explicit size option; -s/--size needs a number,
+	#  -m/--maxavsize sizes to the whole free region without parsing ubinfo.)
+	ubimkvol /dev/ubi0 -N data -m || { log "ubimkvol 'data' FAILED"; exit 1; }
 	log "created UBI volume 'data' (rest of the UBI region)"
 fi
