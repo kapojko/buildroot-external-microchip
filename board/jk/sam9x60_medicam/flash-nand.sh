@@ -66,13 +66,36 @@ confirm() {
     esac
 }
 
+ensure_boot() {
+    # The payload files live on the SD FAT partition; it must be mounted at
+    # $BOOT. Auto-mount it (the SD card is mmcblk0p1 here) so the operator does
+    # not need a manual mount step. Skip if already mounted.
+    if mountpoint -q "$BOOT"; then
+        return 0
+    fi
+    mkdir -p "$BOOT"
+    for p in /dev/mmcblk0p1 /dev/mmcblk1p1; do
+        [ -b "$p" ] || continue
+        if mount "$p" "$BOOT" 2>/dev/null; then
+            log "mounted $p at $BOOT"
+            return 0
+        fi
+    done
+    die "could not auto-mount an SD boot partition at $BOOT; mount it manually (mount /dev/mmcblk0p1 $BOOT)"
+}
+
 check_prereqs() {
     command -v flash_erase >/dev/null || die "flash_erase not found (install mtd-utils)"
     command -v nandwrite    >/dev/null || die "nandwrite not found (install mtd-utils)"
     command -v ubiformat    >/dev/null || die "ubiformat not found (install mtd-utils)"
 
-    [ -d "$BOOT" ]           || die "$BOOT not mounted"
-    [ -b /dev/mtd0 ]         || die "/dev/mtd0 missing — kernel did not register NAND"
+    ensure_boot
+
+    # /proc/mtd lists the NAND partitions; /dev/mtd0 is a char device (major 90),
+    # not a block device — a `-b` test is always false and wrongly reports
+    # "kernel did not register NAND".
+    [ -r /proc/mtd ]         || die "/proc/mtd missing — kernel did not register NAND"
+    [ -c /dev/mtd0 ]         || die "/dev/mtd0 missing — kernel did not register NAND"
 
     # Show operator what's there.
     echo
