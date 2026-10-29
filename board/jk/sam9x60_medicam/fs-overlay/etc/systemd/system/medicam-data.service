@@ -4,9 +4,37 @@ Documentation=file:/usr/local/sbin/medicam-data.sh
 # Finds the UBI MTD partition by label, attaches it and creates the "data"
 # volume (rest of the UBI region) on first boot. Must finish before data.mount
 # mounts /data; both are pulled in by local-fs.target.
+#
+# DefaultDependencies=no is MANDATORY, not cosmetic. A unit with the default
+# dependency set is ordered After=basic.target, while every local mount unit is
+# implicitly Before=local-fs.target, and the boot chain runs
+# local-fs.target -> sysinit.target -> basic.target. Keeping "After=basic.target"
+# AND "Before=data.mount/local-fs.target" therefore closes a cycle:
+#
+#   data.mount -> medicam-data.service -> basic.target -> sockets.target
+#              -> dbus.socket -> sysinit.target -> systemd-tmpfiles-setup.service
+#              -> local-fs.target -> data.mount
+#
+# systemd breaks such a cycle by deleting a job, and the victim is not stable
+# across boots/configurations. Measured on the board 2026-10-29 (NAND boot):
+#
+#   data.mount: Found ordering cycle on medicam-data.service/start
+#   data.mount: Job medicam-data.service/start deleted to break ordering cycle
+#
+# With that job gone, data.mount (Requires=medicam-data.service) was dropped as
+# well, so /data was never mounted, medicam-data-init.service was skipped and
+# every unit with RequiresMountsFor=/data (the user application) never entered
+# the boot transaction. The SD-boot verification of stage 1.5 passed only
+# because a different job lost the cycle that time.
+#
+# The unit is therefore modelled on systemd-remount-fs.service: an early-boot
+# prerequisite of local-fs.target with DefaultDependencies=no and an explicit
+# ordering/Conflicts set.
+DefaultDependencies=no
 After=local-fs-pre.target
-Before=data.mount local-fs.target
+Before=data.mount local-fs.target shutdown.target
 Wants=local-fs-pre.target
+Conflicts=shutdown.target
 
 [Service]
 Type=oneshot

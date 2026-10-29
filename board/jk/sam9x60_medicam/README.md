@@ -216,6 +216,25 @@ was a plain directory in the rootfs). The desktop script and the user
 application reach it through the contract in PLAN section 11
 (`RequiresMountsFor=/data`).
 
+**Do not give `medicam-data.service` the default dependency set.** It has to be
+ordered before `local-fs.target`, which a unit with `DefaultDependencies=yes`
+can never be (`After=basic.target`), and systemd resolves the resulting ordering
+cycle by deleting a job at random. Measured 2026-10-29 (PLAN **F29**): on a NAND
+boot it deleted `medicam-data.service/start`, so `data.mount` was dropped too and
+`/data` was never mounted — the journal showed
+
+    data.mount: Found ordering cycle on medicam-data.service/start
+    data.mount: Job medicam-data.service/start deleted to break ordering cycle
+
+while the user application (and `medicam-data-init.service`) simply never
+entered the boot transaction. The unit therefore carries
+`DefaultDependencies=no` plus the `systemd-remount-fs.service` ordering set
+(`After=local-fs-pre.target`, `Before=data.mount local-fs.target shutdown.target`).
+Quick check after any change to the boot-time units:
+
+    journalctl -b | grep -c 'ordering cycle'        # must be 0
+    systemctl is-active medicam-data.service data.mount medicam-data-init.service
+
 MCU temperature (there is no on-die sensor)
 -------------------------------------------
 The SAM9X60 has **no temperature sensor at all** - not disabled, absent. PLAN

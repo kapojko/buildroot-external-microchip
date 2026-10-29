@@ -675,3 +675,62 @@ Conventions
              retries);
           3. scope NRST + PWRHLD + NAND VCC/R-B# at cold power-on, bootable card
              vs no card (when does the SoC start, when is NAND accessed?).
+
+--------------------------------------------------------------------------------
+11. FIX - /data DROPPED FROM THE BOOT TRANSACTION           [x] fixed 2026-10-29
+--------------------------------------------------------------------------------
+11.1 [x] SYMPTOM (board, NAND boot, no SD card, reboot): /data not mounted,
+        medicam.service (user app) and medicam-data-init.service never started;
+        medicam-identity/-hostname did start; `systemctl start` works manually.
+        `systemctl is-active`: medicam-data.service active, data.mount inactive.
+        All units `is-enabled` -> enabled, local-fs.target.wants symlinks present.
+11.2 [x] ROOT CAUSE - ordering cycle created by our own unit files. Journal:
+          data.mount: Found ordering cycle on medicam-data.service/start
+          data.mount: Found dependency on basic.target/start
+          ... sockets.target -> dbus.socket -> sysinit.target ->
+              systemd-tmpfiles-setup.service -> local-fs.target -> data.mount
+          data.mount: Job medicam-data.service/start deleted to break ordering
+                      cycle starting with data.mount/start
+        medicam-data.service had DefaultDependencies=yes (= After=basic.target)
+        while declaring Before=data.mount/local-fs.target; a local mount unit is
+        implicitly Before=local-fs.target and the chain is
+        local-fs.target -> sysinit.target -> basic.target. Hence the cycle.
+11.3 [x] CONSEQUENCE chain: job deleted -> data.mount
+        (Requires=medicam-data.service) dropped -> medicam-data-init.service
+        (Requires=data.mount) skipped -> medicam.service
+        (RequiresMountsFor=/data) never entered the transaction. The stage-1.5
+        SD-boot verification (8.5) passed only because a different job lost the
+        cycle that time - FLAKY, and the defect was present in both boot
+        configurations.
+11.4 [x] FIX (PLAN F29): medicam-data.service rewritten as an early-boot
+        prerequisite, modelled on systemd-remount-fs.service:
+          DefaultDependencies=no
+          After=local-fs-pre.target
+          Before=data.mount local-fs.target shutdown.target
+          Wants=local-fs-pre.target
+          Conflicts=shutdown.target
+        [Service]/[Install] unchanged; data.mount and medicam-data-init.service
+        unchanged. Only file touched: fs-overlay/etc/systemd/system/
+        medicam-data.service.
+11.5 [x] VERIFIED on the board (NAND boot, no SD, 2 reboots): the in-image units
+        were byte-identical to git first (md5 9e746533...), fix installed as a
+        drop-in (medicam-data.service.d/10-early.conf) -> reboot -> then as the
+        real /etc/systemd/system/medicam-data.service (md5 cd94f0ae... == repo)
+        -> reboot. Both boots:
+        - `journalctl -b | grep -c 'ordering cycle'` = 0
+        - medicam-data.service / data.mount / medicam-data-init.service /
+          medicam.service = active, active, active, active (running)
+        - "ubi0:data on /data type ubifs (rw,noatime)", df 617.4M (612.6M free)
+        - app: "Started MediCam device agent (DeviceProc)", "device id from
+          EEPROM mac=2a45d548db74", "photo done" (20 s after boot)
+11.6 [ ] PENDING: rebuild the SD and NAND images and reflash/rewrite the field
+        card so the shipped rootfs carries the fix (until then the live board has
+        it as /etc/systemd/system/medicam-data.service, identical to the repo).
+11.7 [ ] COSMETIC (unrelated, not fixed):
+        a) data.mount logs "Directory /data to mount over is not empty, mounting
+           anyway" - post-build.sh mkdirs /data/home in the rootfs (a stage 1
+           leftover); it is shadowed once the volume is mounted. Dropping that
+           mkdir -p is a one-line follow-up.
+        b) /usr/lib/systemd/system/medicam.service (from the DeviceProc
+           installer) is mode 0755 -> "marked executable. Please remove
+           executable permission bits." Fix in the app installer (chmod 644).

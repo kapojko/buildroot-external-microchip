@@ -2,11 +2,14 @@
 
 Status: **stage 0, stage 1, stage 1.5 and stage 2 done and verified on hardware
 (2026-10-28): the board boots from NAND with no SD card, `/` on UBIFS and `/data`
-on a second UBI volume.** Open: the 10x reboot / 5x power-cut matrix (stage 2
-run-off) and the ~30 s ROM boot-sequence delay without an SD card (F26, accepted
-for now). Work happens session by session on branch `medicam_clean` (created from
-`medicam`); see the working rules in section 0 and the measured log in
-LOG_base_image.txt.
+on a second UBI volume.** 2026-10-29: **F29 fixed** — an ordering cycle in
+`medicam-data.service` had been dropping `/data` (and with it the user
+application) from the boot transaction; the unit fix is verified on hardware,
+but both images still have to be rebuilt/reflashed to ship it. Open: the 10x
+reboot / 5x power-cut matrix (stage 2 run-off) and the ~30 s ROM boot-sequence
+delay without an SD card (F26, accepted for now). Work happens session by
+session on branch `medicam_clean` (created from `medicam`); see the working
+rules in section 0 and the measured log in LOG_base_image.txt.
 
 Board: SAM9X60D1G SiP (DDR2 128 MiB in package), 128 MiB RAM, MT29F8G08ABACAWP
 parallel NAND (1 GiB), OV2640 camera on ISI, 24C256 EEPROM @0x50 on I2C0,
@@ -475,6 +478,41 @@ returns nil). Do not enable the `generic-adc-thermal` node before the part is
 populated: a floating pin yields a plausible-looking but meaningless
 temperature.
 
+**F29 — `/data` was silently dropped from the boot transaction (ordering
+cycle).** Measured on the board 2026-10-29 (NAND boot, no SD card): after a
+reboot `/data` was not mounted, `medicam.service` and
+`medicam-data-init.service` had never been started, while
+`medicam-identity`/`-hostname` had; `systemctl start` worked. The cause is our
+own unit graph — `medicam-data.service` kept the default dependency set
+(`After=basic.target`) while declaring `Before=data.mount local-fs.target`, and
+a local mount unit is implicitly `Before=local-fs.target`, while the boot chain
+runs `local-fs.target → sysinit.target → basic.target`. The journal spells the
+cycle out:
+
+```
+data.mount: Found ordering cycle on medicam-data.service/start
+data.mount: Found dependency on basic.target/start
+... sockets.target → dbus.socket → sysinit.target →
+    systemd-tmpfiles-setup.service → local-fs.target → data.mount
+data.mount: Job medicam-data.service/start deleted to break ordering cycle
+```
+
+The job systemd deletes is **not stable**: with `medicam-data.service/start`
+gone, `data.mount` (`Requires=medicam-data.service`) was dropped too,
+`medicam-data-init.service` (`Requires=data.mount`) was skipped, and every unit
+with `RequiresMountsFor=/data` — i.e. the user application — never entered the
+transaction. **The stage 1.5 "`/data` mounted after a reboot" verification
+therefore passed by luck**, not because the graph was correct; the defect was
+present in the SD-boot configuration as well (a different job happened to lose
+the cycle). → fixed in the stage-1.5 unit set (8.3): `medicam-data.service` is
+now an early-boot prerequisite modelled on `systemd-remount-fs.service`
+(`DefaultDependencies=no`, `After=local-fs-pre.target`, `Before=data.mount
+local-fs.target shutdown.target`, `Wants=local-fs-pre.target`,
+`Conflicts=shutdown.target`). Rule for future units: **anything that must be
+ordered before `local-fs.target` has to use `DefaultDependencies=no`** — with
+the default dependency set it is ordered after `basic.target` and can never be
+placed before the boot's filesystem targets.
+
 ---
 
 ## 5. Decisions (locked)
@@ -706,6 +744,16 @@ have no `ExecStartPost` — verified) + `medicam-data.sh`. MTD resolved by label
 `ubiattach` when absent, `ubimkvol` at maximum size (rest of UBI, die-agnostic)
 on first boot. `data` volume only; `rootfs` volume deferred to stage 2.
 
+**`DefaultDependencies=no` on `medicam-data.service` is mandatory** (F29): the
+unit must run before `local-fs.target`, which is impossible for a unit that
+keeps the default dependency set (`After=basic.target`), and systemd resolves the
+resulting cycle by deleting jobs at random — at worst `medicam-data.service`,
+so `data.mount` and every `RequiresMountsFor=/data` unit silently stay out of the
+boot. Ordering as built (copy of `systemd-remount-fs.service`):
+`DefaultDependencies=no`, `After=local-fs-pre.target`, `Before=data.mount
+local-fs.target shutdown.target`, `Wants=local-fs-pre.target`,
+`Conflicts=shutdown.target`.
+
 1. `etc/systemd/system/data.mount` (`What=/dev/ubiblock…` **or** UBIFS on
    `ubi0:data`, `Where=/data`, `Type=ubifs`) plus
    `medicam-data.service` (`Before=local-fs.target`), a oneshot that:
@@ -858,6 +906,7 @@ possible later alternative (F20) — not implemented now.
 | Wi-Fi | `rfkill list`; `iw dev`; RT5370 plugged → `wlan0` present; `wpa_supplicant` associates |
 | NAND geometry | `mtdinfo /dev/mtd0` → erasesize 262144, pagesize 4096, oobsize **224**; `dmesg \| grep -i pmecc` |
 | NAND data | `mount \| grep /data`; 50 MiB write, reboot, read-back |
+| Boot transaction after a reboot | `journalctl -b \| grep -c 'ordering cycle'` → **0**; `systemctl is-active medicam-data.service data.mount medicam-data-init.service` → active ×3; every unit with `RequiresMountsFor=/data` started on its own (F29) |
 | NAND boot | SD removed: `RomBOOT` → bootstrap → U-Boot → kernel → systemd |
 | Layout consistency | `git grep -n "0x[aA]00000\|numpebs\|mtdparts"` — DTS, env, genimage and flash script must agree |
 
