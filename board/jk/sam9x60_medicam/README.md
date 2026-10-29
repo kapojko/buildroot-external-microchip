@@ -373,17 +373,37 @@ one-time OTP (see PLAN F26 for the three options) — accepted as-is for now.
 
 Host / rebuild strategy
 -----------------------
-The NAND tree reuses the SD tree's host toolchain instead of recompiling it:
+Each output tree owns its **own** host directory - 706 MiB (`output/host`) and
+709 MiB (`output-nand/host`). They must never be shared:
 
     cd ~/src/buildroot-mchp
     make O=output-nand BR2_EXTERNAL=~/src/buildroot-external-microchip sam9x60_medicam_nand_defconfig
-    ln -s output/host output-nand/host     # share the 723 MiB host (paths stay valid)
     make O=output-nand BR2_EXTERNAL=~/src/buildroot-external-microchip
+    #  NO "ln -s output/host output-nand/host"!  See "why" below.
+
+The two trees *looked* able to share one host via a symlink
+(`ln -s output/host output-nand/host`), and the first pair of builds happened to
+work because the tree that built last had its own `HOST_DIR` string baked into
+the tools. It is not a supported configuration: `host-finalize` runs
+`support/scripts/fix-rpath`, which calls
+`patchelf --make-rpath-relative <HOST_DIR>` on all 445 host ELF files and
+**drops every RPATH/RUNPATH entry that does not live below that tree's own
+`HOST_DIR`**. So a build in tree A strips the `$ORIGIN`-relative entries that
+tree B's tools need, and tree B fails at run time:
+
+    output/host/bin/systemd-tmpfiles: error while loading shared libraries:
+      libsystemd-shared-256.so: No such file or directory
+    make: *** [fs/ext2/ext2.mk:65: output/images/rootfs.ext2] Error 127
+
+Same for `host/bin/openssl` (falls back to the distro `libssl.so.3`,
+`OPENSSL_3.4.0 not found`). The mangling is order-dependent (the last build
+wins), which is why it looked like "the SD build broke after the NAND build".
 
 Caveats:
-* build the two trees **sequentially**, never in parallel (shared host dir);
-* buildroot has **no `dirclean`** target, and `make clean` deletes `output/host`
-  (a ~50% rebuild). For a clean rebuild without touching the host use
+* build the two trees **sequentially**, never in parallel (12 cores; two full
+  builds in parallel only thrash - they no longer interfere, though);
+* buildroot has **no `dirclean`** target, and `make clean` deletes that tree's
+  `host/` (a ~50% rebuild). For a clean rebuild without touching the host use
   `make_clean_no_host.sh` (removes build/target/staging/images, keeps host + dl):
 
       board/jk/sam9x60_medicam/make_clean_no_host.sh            # SD tree
@@ -392,6 +412,21 @@ Caveats:
 * **toggling between the two defconfigs needs NO clean** - the package set is
   identical; just `make <defconfig>` + `make`.
 * a clean is only required when the package set changes (PLAN F22).
+* both trees share `dl/` (no per-tree download dir), so a rebuild re-downloads
+  nothing; `BR2_CCACHE_USE_BASEDIR=y` puts the base dir into the ccache hash,
+  so the two trees do **not** share compiler-cache hits (a NAND full rebuild is
+  a real compile, ~30-45 min on 12 cores).
+
+Artifact checksums
+------------------
+`MD5SUMS` records the md5 of the deliverables of the last verified build
+(2026-10-29). Paths are relative to the buildroot tree, so it is checked with:
+
+    cd ~/src/buildroot-mchp
+    md5sum -c ~/src/buildroot-external-microchip/board/jk/sam9x60_medicam/MD5SUMS
+
+Regenerate it after every image build (rootfs timestamps/uuid change even for an
+unchanged package set).
 
 Recovery (SAM-BA)
 -----------------
@@ -457,6 +492,8 @@ genimage-nand.cfg              NAND build images (stage 2, frozen)
 flash-nand.sh                  SD-rescue NAND flasher (stage 2, frozen)
 make-rescue-sd.sh              assemble the rescue SD from both builds (mtools)
 make_clean_no_host.sh          clean a buildroot output without touching host
+MD5SUMS                        md5 of the last verified build's images
+                               (md5sum -c from the buildroot tree root)
 post-image-pre.sh              NAND build: copies boot.bin.pmecc + regenerates
                                uboot-env.bin (run before genimage)
 at91bootstrap_nand.fragment    at91bootstrap fragment: PMECC OOB 224, no curiosity

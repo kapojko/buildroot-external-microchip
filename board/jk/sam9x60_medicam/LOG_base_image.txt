@@ -723,9 +723,11 @@ Conventions
         - "ubi0:data on /data type ubifs (rw,noatime)", df 617.4M (612.6M free)
         - app: "Started MediCam device agent (DeviceProc)", "device id from
           EEPROM mac=2a45d548db74", "photo done" (20 s after boot)
-11.6 [ ] PENDING: rebuild the SD and NAND images and reflash/rewrite the field
-        card so the shipped rootfs carries the fix (until then the live board has
-        it as /etc/systemd/system/medicam-data.service, identical to the repo).
+11.6 [ ] PENDING: reflash/rewrite the board and the field card so the shipped
+        rootfs carries the fix (until then the live board has it as
+        /etc/systemd/system/medicam-data.service, identical to the repo).
+        Images REBUILT and verified 2026-10-29 (12.3/12.4) - what is left is
+        flashing the new card and re-running the static check on a reboot (12.6).
 11.7 [ ] COSMETIC (unrelated, not fixed):
         a) data.mount logs "Directory /data to mount over is not empty, mounting
            anyway" - post-build.sh mkdirs /data/home in the rootfs (a stage 1
@@ -761,3 +763,74 @@ Conventions
         pulled in at boot; a unit that is not loaded cannot get a job and so
         cannot be in a cycle), and it proves ORDERING, not runtime success -
         a failing ubiattach is still a plain unit failure, not a silent skip.
+
+12. REBUILD AFTER THE FIX + SPLIT HOST DIRECTORIES             [x] 2026-10-29
+12.1 [x] WHAT WAS DONE: removed the `output-nand/host -> output/host` symlink
+        and rebuilt BOTH trees from scratch (`make clean` in output/,
+        `make O=output-nand clean`), so each tree owns its host toolchain:
+          output/host       706 MiB
+          output-nand/host  709 MiB
+        Neither tree downloads again: DL_DIR is shared (dl/, 2441 MiB);
+        output-nand has no dl/ of its own.
+12.2 [x] WHY THE SYMLINK HAD TO GO. Sharing one HOST_DIR between two output
+        dirs is not supported, and it failed on 2026-10-29 17:37 in the SD tree:
+          output/host/bin/systemd-tmpfiles: error while loading shared libraries:
+            libsystemd-shared-256.so: No such file or directory
+          make: *** [fs/ext2/ext2.mk:65: output/images/rootfs.ext2] Error 127
+        MECHANISM: host-finalize runs support/scripts/fix-rpath, which calls
+        `patchelf --make-rpath-relative <HOST_DIR>` on every host ELF file and
+        DROPS each RPATH/RUNPATH entry that is not below that tree's own
+        HOST_DIR. Tree A's finalize therefore strips the $ORIGIN-relative
+        entries tree B's tools need (and vice versa). host/bin/openssl broke the
+        same way (fell back to the distro libssl.so.3 -> OPENSSL_3.4.0 missing).
+        EVIDENCE of the ping-pong (same physical files, two builds):
+          SD build complete (images, host-openssl .stamp_host_installed) 14:02
+          host/include/openssl/opensslv.h, host/lib/pkgconfig/libssl.pc 14:37
+          host/lib/systemd/{catalog,network,system,systemd}, stamp        14:43
+          SD `make` -> "Finalizing host directory", 445 ELF files       17:37
+        The last build wins, which is why "the SD build broke after the NAND
+        build" and why yesterday it appeared to work.
+12.3 [x] RESULT - byte sizes identical to the verified 2026-10-28 build:
+          output/images/sdcard.img              286261248 B
+          output/images/rootfs.ext2             268435456 B
+          output/images/boot.vfat                16777216 B
+          output-nand/images/sdcard.img         537919488 B
+          output-nand/images/sdcard-rescue.img  537919488 B  (regenerated from
+                                                 the new builds by
+                                                 make-rescue-sd.sh)
+          output-nand/images/medicam-nand.img  1073741824 B  (exactly 0x40000000)
+          output-nand/images/rootfs.ubifs        33013760 B
+          output-nand/images/rootfs.ubi          34078720 B
+        Both hosts are now real directories (`ls -ld` -> drwxr-xr-x), not links.
+12.4 [x] CONTENT VERIFIED, not just "make exited 0":
+        - medicam-data.service md5 cd94f0ae01d8ff5a6e613e9ac49742d7 in
+          output/target, output-nand/target AND inside BOTH rootfs.tar
+          (`tar -xOf .../rootfs.tar ./etc/systemd/system/medicam-data.service`),
+          i.e. the fix is in the shipped rootfs, not only in the live board;
+        - medicam-nand.img payloads byte-identical (cmp) at every declared
+          offset: 0x000000 boot.bin.pmecc, 0x040000 u-boot.bin,
+          0x100000 + 0x140000 uboot-env.bin, 0x180000 dtb, 0x200000 zImage,
+          0xa00000 rootfs.ubifs; image = 0x40000000 = 0xa00000 + 0x3f600000;
+        - sdcard.img partition tables (sfdisk): SD build = 16 MiB FAT @2048
+          + 256 MiB ext4 @34816; NAND build = 256 MiB FAT @1M + 256 MiB ext4;
+        - FAT contents (mdir @@1048576): SD = zImage, dtb, boot.bin, u-boot.bin,
+          uboot.env; NAND = those + boot.bin.pmecc, uboot-env.bin, rootfs.ubifs;
+          rescue = SD boot.bin (18929) + SD u-boot.bin (458952) + NAND u-boot as
+          u-boot-nand.bin (580112) + NAND env (262144) + flash-nand.sh.
+12.5 [x] MD5SUMS committed in the board dir (10 entries, paths relative to the
+        buildroot tree, check with
+          cd ~/src/buildroot-mchp &&
+          md5sum -c ~/src/buildroot-external-microchip/board/jk/sam9x60_medicam/MD5SUMS
+        ): sdcard.img a16f7d85, nand sdcard.img 47478a30, sdcard-rescue.img
+        b81d4bc8, medicam-nand.img 283c2b06, rootfs.ubifs d28c0997.
+        Archived (copied, md5 re-verified after the copy) to
+        S:\Платы\MediCam_1.0\BSP\Build 2026-10-29\{sdcard.img,
+        sdcard-rescue.img, medicam-nand.img} + MD5SUMS + README.txt.
+12.6 [ ] STILL PENDING: write the new card, reflash/rewrite the board from
+        these images, and re-run check-boot-order.sh after a reboot (11.6).
+        The static proof in 11.8 already covers the ordering graph; this is the
+        "shipped artifact == verified artifact" step.
+12.7 [x] NOTE for future rebuilds: BR2_CCACHE_USE_BASEDIR=y puts the buildroot
+        base dir into the ccache hash, so the two trees do NOT share compiler
+        cache hits - an SD rebuild hits the cache (~15-25 min on 12 cores), a
+        NAND full rebuild is a real compile (~30-45 min).
