@@ -7,7 +7,7 @@ RMII Ethernet, USB host + USB device.
 
 Documents in this directory
 ---------------------------
-PLAN_base_image.md   implementation plan, findings (F1..F21), stages, verification
+PLAN_base_image.md   implementation plan, findings (F1..F28), stages, verification
                      matrix. Section 0 holds the working rules for future sessions.
 LOG_base_image.txt   reproducible build/verify log, step by step, with measured
                      values. Update it in the same commit as the stage it documents.
@@ -215,6 +215,69 @@ boot by `data.mount` (prepared by `medicam-data.service`; before stage 1.5 it
 was a plain directory in the rootfs). The desktop script and the user
 application reach it through the contract in PLAN section 11
 (`RequiresMountsFor=/data`).
+
+MCU temperature (there is no on-die sensor)
+-------------------------------------------
+The SAM9X60 has **no temperature sensor at all** - not disabled, absent. PLAN
+F28 has the evidence; the short version:
+
+* DATASHEET features: "One 12-channel 12-bit ADC with 4/5-wire resistive
+touchscreen support" and nothing else; the ADC register map has the touchscreen
+registers (`ADC_TSMR`, `ADC_XPOSR`, `ADC_YPOSR`, `ADC_PRESSR` at 0xB0-0xBC) where
+SAMA5D2 has `TEMPMR`/`TEMPON` (0x44).
+* KERNEL: `sam9x60.dtsi` reuses `atmel,sama5d2-adc` -> `sama5d2_platform`, which
+has no temp channel; the board's `iio:device0` exposes `in_voltage0..11` only.
+* `CONFIG_AT91SAM9X_THERM` does not exist in the kernel tree at all (the symbol
+named in DeviceProc-go's TODO is invented).
+* BOARD today: `/sys/class/thermal` absent (`CONFIG_THERMAL` off), no hwmon
+device, `i2cdetect -y 0` shows only 0x30 (OV2640) and 0x50 (EEPROM), PB14/AD3 is
+muxed as ADC but unconnected.
+
+So `Tm` (MCU temperature) needs an external part, added on a board revision.
+Both routes give PCB/case temperature near the sensor, never the junction:
+
+1. **NTC + fixed resistor on a free ADC pin** (AD0-AD3/AD6 = PB11, PB12, PB13,
+   PB14, PB17 are unused on MediCam). Needs `CONFIG_THERMAL=y` +
+   `CONFIG_GENERIC_ADC_THERMAL=y` in the kernel fragment and a DT node:
+
+       thermal_sensor: thermal-sensor {
+               compatible = "generic-adc-thermal";
+               #thermal-sensor-cells = <0>;
+               io-channels = <&adc 3>;          /* AD3 = PB14 */
+               io-channel-names = "sensor-channel";
+               temperature-lookup-table = <...>;  /* mC, raw */
+       };
+
+   plus a `thermal-zones` node pointing at it. Result: a real
+   `/sys/class/thermal/thermal_zone0/temp` (milli-degrees) and the user
+   application works unchanged.
+2. **LM75-compatible I2C sensor** on the free I2C0 addresses 0x48-0x4F (TMP112,
+   TMP75, LM75B, TCN75, MCP980x...). **No kernel rebuild**: `CONFIG_SENSORS_LM75=m`
+   is already in the image (`lm75.ko` in `/lib/modules/.../kernel/drivers/hwmon/`,
+   `modprobe lm75` verified on the board). Add a DT node:
+
+       tmp112: temperature-sensor@48 {
+               compatible = "ti,tmp112";
+               reg = <0x48>;
+       };
+
+   Result: `/sys/class/hwmon/hwmon0/temp1_input` (milli-degrees). `lm75` is an
+   hwmon driver and registers **no thermal zone**, so the application needs a
+   hwmon fallback (`/sys/class/hwmon/hwmon*/temp1_input`, name `tmp112`).
+   Test without touching the DTB, as soon as the part is fitted:
+
+       echo tmp112 0x48 > /sys/bus/i2c/devices/i2c-0/new_device
+       cat /sys/class/hwmon/hwmon0/temp1_input     # temp1_max/min = Tset/Thyst
+
+   TMP112 notes: `ti,tmp112` is supported by `drivers/hwmon/lm75.c` (16-bit config
+   register, forced 12-bit / 8 Hz, one-shot cleared) and listed in `lm75.yaml`,
+   which forbids an `interrupts` property for it. 0.0625 °C/LSB, ±0.5 °C
+   (0…65 °C), 1.4–3.6 V → runs from `VDD1_3V3`, address 0x48 = ADD0 to GND.
+
+Neither route is enabled in the tree: no sensor is fitted, so `Tm` stays absent
+(the app returns nil). Do **not** enable the `generic-adc-thermal` node before
+the part is populated - a floating pin reports a plausible but meaningless
+temperature.
 
 Two builds and the field flow (stage 2)
 ----------------------------------------

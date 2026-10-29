@@ -428,6 +428,53 @@ Remaining measurements, in order, if this is picked up again:
 Nothing in Buildroot, AT91Bootstrap or U-Boot can influence this; **decision:
 accepted as-is for now** (costs only time-to-first-output).
 
+**F28 — there is no on-die temperature sensor, so `Tm` needs an external part.**
+The user application reads the MCU temperature from
+`/sys/class/thermal/thermal_zone0/temp`, and its TODO assumes a kernel option
+for it; neither the sensor nor that option exists.
+
+* Datasheet features (`SAM9X60-Data-Sheet-DS60001579.md:100`): "One 12-channel
+  12-bit Analog-to-Digital Converter with 4/5 wires resistive touchscreen
+  support" — no temperature sensor anywhere in the peripheral list (lines 1–90),
+  and the SiP datasheet says the same (`SAM9X60-SIP-DataSheet-DS60001580C.md:276`).
+* ADC register map (same datasheet, `:60240`): `ADC_CWR` sits at 0x44 and
+  `ADC_TSMR`/`ADC_XPOSR`/`ADC_YPOSR`/`ADC_PRESSR` at 0xB0–0xBC (touchscreen).
+  The SAMA5D2's `TEMPMR`/`TEMPON` and its temperature channel are absent — the
+  SAM9X60 ADC is the touchscreen variant with the temp sensor removed. The
+  datasheet itself places temperature sensing outside the chip (`:14151`, RTC
+  calibration: "a temperature sensor can be placed close to the crystal
+  oscillator").
+* Kernel: `sam9x60.dtsi` binds `microchip,sam9x60-adc` through the
+  `atmel,sama5d2-adc` fallback to `sama5d2_platform`, which sets no
+  `.temp_sensor` and lists no temperature channel. On the board `iio:device0`
+  (`f804c000.adc`) exposes `in_voltage0..11` only — no `in_temp*`. There is also
+  **no `CONFIG_AT91SAM9X_THERM` anywhere in the 6.12 tree**: the symbol named in
+  the app's TODO is invented and can never be enabled.
+* Measured on the board (2026-10-29): `/sys/class/thermal` does not exist
+  (`CONFIG_THERMAL` is off), no hwmon device is registered, `i2cdetect -y 0`
+  shows only 0x30 (OV2640) and 0x50 (EEPROM). `PB14`/`AD3` is muxed by
+  `pinctrl_adc_default` but nothing is connected to it (`in_voltage3_raw` =
+  14076, floating).
+
+Both ways to get a number are **board changes**, and both measure PCB/case
+temperature near the sensor — never the junction:
+
+| Route | Software | Result |
+|---|---|---|
+| NTC + fixed resistor on a free ADC pin (AD0–AD3/AD6 = PB11/PB12/PB13/PB14/PB17 are free on MediCam) | `CONFIG_THERMAL=y`, `CONFIG_GENERIC_ADC_THERMAL=y`, DT `compatible = "generic-adc-thermal"` with `io-channels = <&adc 3>`, `io-channel-names = "sensor-channel"`, `temperature-lookup-table`, plus a `thermal-zones` entry | real `/sys/class/thermal/thermal_zone0/temp` (m°C) → app unchanged |
+| I2C part on the free I2C0 addresses 0x48–0x4F, LM75-compatible | none — `CONFIG_SENSORS_LM75=m` is already in the image and `modprobe lm75` was verified on the board; DT node `compatible = "ti,tmp112"; reg = <0x48>;` | `/sys/class/hwmon/hwmon0/temp1_input` (m°C); no thermal zone, so the app needs a hwmon fallback |
+
+TMP112 (`TMP112AIDRLR`, SOT-563) fits the second route: `ti,tmp112` is in
+`drivers/hwmon/lm75.c` (16-bit config register, forced 12-bit/8 Hz, one-shot
+cleared) and in `lm75.yaml`, which forbids an `interrupts` property for it;
+0.0625 °C/LSB, ±0.5 °C over 0–65 °C, 1.4–3.6 V (runs from `VDD1_3V3`). Runtime
+test without a DTB change: `echo tmp112 0x48 > /sys/bus/i2c/devices/i2c-0/new_device`.
+
+**Decision: not enabled.** No sensor is fitted, so `Tm` stays absent (the app
+returns nil). Do not enable the `generic-adc-thermal` node before the part is
+populated: a floating pin yields a plausible-looking but meaningless
+temperature.
+
 ---
 
 ## 5. Decisions (locked)
@@ -751,6 +798,11 @@ Known behaviour: ~30 s delay before `RomBOOT` when no SD card is inserted (F26).
   (needs the `uboot-tools` target package).
 * Read-only rootfs + overlayfs (unblocked by the F1 fragment fix).
 * Firewall, only if a rule set is designed (F10).
+* MCU temperature (F28): no on-die sensor exists. Either an NTC on a free ADC
+  pin (`CONFIG_THERMAL` + `CONFIG_GENERIC_ADC_THERMAL` + thermal zone, app
+  unchanged) or an LM75-compatible I2C part (`lm75` is already a module, app
+  needs a hwmon fallback). Both need a board revision; `Tm` stays absent until
+  then.
 * Local media storage for the camera, if required (large-capacity NAND only).
 
 ---
