@@ -834,3 +834,39 @@ Conventions
         base dir into the ccache hash, so the two trees do NOT share compiler
         cache hits - an SD rebuild hits the cache (~15-25 min on 12 cores), a
         NAND full rebuild is a real compile (~30-45 min).
+
+--------------------------------------------------------------------------------
+13. eth0 RECEIVE-PATH STALL AFTER A LONG UNPLUG (F31) - 2026-10-29
+--------------------------------------------------------------------------------
+13.1 [x] REPRODUCED and LOCALISED TO THE PHY. Board in the stalled state (NAND
+        boot, carrier up, 100Mb/s full, no IPv4, rx_packets frozen, tx_packets
+        advancing, every RX error counter 0). MAC read with busybox devmem over
+        COM (base 0xf802c000): NCR=0x1C, RBQP=0x26C77000 (descriptor 0 = the
+        software ring position), RSR=0x02 (BNA clear), ISR=0, IMR=0x7305,
+        TSR=0x21. PHY over MDIO (MAN 0x34): BMCR=0x3100, BMSR=0x786D, ANAR and
+        ANLPAR both 100F, reg 18h bit 11 = 1 (EDPD disabled, not involved).
+        This also supersedes F30: the DHCP client was retrying normally, no
+        OFFER could arrive because the receive path delivered no frame.
+13.2 [x] RECOVERY EXPERIMENTS
+        a) ethtool -r eth0 (autoneg restart): no recovery.
+        b) cable replug (PHY link cycle): no recovery.
+        c) PHY soft reset (BMCR bit 15) with the link up: RX returns at once
+           and dmesg shows NO Link Down/Up, i.e. the MAC was never
+           re-initialised -> the defect is PHY-side, not MAC/driver. Side
+           effect: that PHY then decoded with errors (rx_crc_errors +1.6/s,
+           TX clean, 50% ping loss) and a following ip link down/up with a 1 s
+           gap did not clear it. Not a usable recovery.
+        d) ip link down; 10 s; up (+ networkctl reconfigure): clean; lease in
+           ~1 s; rx_crc_errors frozen (923 -> 923 across a 4 MB scp, md5
+           identical, ping 20/20, tx_errors 0, collisions 0). Chosen action.
+13.3 [x] WORKAROUND in the tree (not yet in a built image): medicam-netwatch.sh
+        + .service (Type=oneshot, TimeoutStartSec=90) + .timer (OnBootSec=180s,
+        OnUnitActiveSec=60s), enabled by 85-medicam.preset. Fast exit when
+        carrier is down or IPv4 is present; otherwise 3 x 10 s rx_packets
+        samples; frozen -> down, 10 s, up, networkctl reconfigure, one
+        daemon.err journal line. Installed by hand on the board 2026-10-29,
+        image rebuild deferred (owner's decision).
+13.4 [ ] DEFERRED: root cause (KSZ8081 receive PLL / adaptive equaliser after a
+        long link absence; Microchip FAE or errata question) and the
+        driver-level fix (reset the PHY on carrier loss, while the line is
+        idle). The watchdog stays in the image until then.

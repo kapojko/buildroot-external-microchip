@@ -14,3 +14,4 @@ enable medicam-hostname.service
 enable medicam-data.service
 enable data.mount
 enable medicam-data-init.service
+enable medicam-netwatch.timer

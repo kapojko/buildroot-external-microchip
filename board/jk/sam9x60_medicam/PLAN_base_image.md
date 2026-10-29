@@ -560,6 +560,11 @@ tcpdump):
    `networkctl renew eth0` (or a `networkctl reload`) recovers it — that
    suggests a watch/link-state bug rather than the DHCP engine.
 
+**2026-10-29: superseded by F31.** The DHCP client was innocent: it kept
+retrying (state `degraded`, DISCOVERs on the wire) while the MACB receive path
+delivered no frame at all, so no OFFER could ever arrive. The timelines above
+are F31's signature.
+
 Workaround for the field until fixed: the application already keeps polling
 silently and resumes cleanly the moment the address appears; a delayed lease
 only delays re-registration, it does not require a reboot. Possible BSP-level
@@ -567,6 +572,39 @@ mitigation if the stall is confirmed: a tiny oneshot triggered by
 `ExecStartPost`/`networkctl renew eth0` on carrier-up (or run networkd's DHCP
 client with a shorter `RetryOnFailure`-style backoff where supported by
 systemd 256).
+
+**F31 — after a long cable unplug the KSZ8081 comes back with a dead receive
+path; only a PHY re-initialisation with the line idle clears it (root cause
+open; workaround shipped).** Measured 2026-10-29 on the NAND boot.
+
+Observations in the stalled state (cable out ~2:30, then plugged back):
+* `Link is Up - 100Mbps/Full` in dmesg, `carrier=1`, `operstate=up`, PHY
+  `BMSR=0x786D` (link up, autoneg complete, no error bits), `BMCR=0x3100`,
+  ANAR/ANLPAR both 100F, reg 18h bit 11 = 1 (EDPD disabled - not involved).
+* `rx_packets` frozen (2563) while `tx_packets` advances: the DHCP DISCOVERs
+  leave, no OFFER arrives. No IPv4; networkd `ADDRESS_STATE=degraded`,
+  `IPV4_ADDRESS_STATE=off`. **All RX error counters 0.**
+* MAC registers read over COM (`busybox devmem`, base `0xf802c000`):
+  `NCR=0x1C` (RE|TE|MPE), `RBQP=0x26C77000` = descriptor 0, i.e. the live RX
+  pointer sits exactly on the software ring position, `RSR=0x02` (BNA clear -
+  no buffer shortage), `ISR=0`, `IMR=0x7305`, `TSR=0x21`. The MAC and the ring
+  are healthy; the PHY reports link up.
+* `ethtool -r eth0` (autoneg restart) and a cable replug (PHY link cycle): no
+  recovery.
+* PHY-only soft reset (BMCR bit 15) over MDIO **with the link up and traffic
+  flowing**: RX returns at once and dmesg shows **no** `Link is Down/Up` (the
+  MAC was never re-initialised) - the defect is on the PHY side, not in the
+  MAC/driver. Side effect: that PHY then decoded with errors
+  (`rx_crc_errors`/RX_ER ~1.6/s, TX clean, 50% ping loss) and a following
+  `ip link down/up` with a 1 s gap did not clear it. **Not a usable recovery.**
+* `ip link set eth0 down; sleep 10; ip link set eth0 up`: clean recovery,
+  lease in ~1 s, `rx_crc_errors` frozen across a 4 MB scp (md5 ok, ping 20/20).
+
+Conclusion so far: the receive path is wedged inside the KSZ8081 after a long
+absence of link, and only a PHY re-initialisation with the line idle clears it.
+Silicon/analogue state (receive PLL / adaptive equaliser) is the prime suspect.
+Deferred: Microchip FAE/errata question and a driver-level reset on carrier
+loss; until then the watchdog of 8.5 stays in the image.
 
 ---
 
@@ -851,6 +889,29 @@ whenever the SD card is rewritten — unacceptable for "target the board as
    MAC, yet the board came back with the same MAC `2a:45:d5:48:db:74` and hostname
    `medicam-48db74`, with zero EEPROM rewrites (LOG 7.15). The blank-record path
    works but is only proven manually — test it on a spare board.
+
+### 8.5 eth0 receive-path watchdog (F31 workaround) — **[x] implemented 2026-10-29**
+
+Files: `fs-overlay/usr/local/sbin/medicam-netwatch.sh`,
+`etc/systemd/system/medicam-netwatch.service` (`Type=oneshot`,
+`TimeoutStartSec=90`), `etc/systemd/system/medicam-netwatch.timer`
+(`OnBootSec=180s`, `OnUnitActiveSec=60s`), enabled by `85-medicam.preset`
+(`enable medicam-netwatch.timer`).
+
+Logic: fast exit when carrier is down or when carrier **and** IPv4 are present;
+otherwise sample `rx_packets` three times 10 s apart and exit as soon as it
+advances; if all three samples are equal, `ip link down`, 10 s, `ip link up`,
+`networkctl reconfigure`, and one `daemon.err` journal line with the counters
+before and after. No state file, no backoff. The timer cannot overlap runs:
+starting an already-active oneshot unit is a no-op in systemd.
+
+Cost per event: ~90 s to detect + ~12 s link down; every TCP session and stream
+on eth0 drops. Limits: it masks the defect (one journal line per event is the
+counter — zero lines over N days is the test result) and it assumes a
+DHCP-configured eth0.
+
+Retire it when the driver-level fix (reset the PHY on carrier loss, while the
+line is idle) has been validated over repeated flaps.
 
 **Exit criteria (1.5):** `/data` is mounted from NAND after a reboot and survives
 reflashing the SD rootfs; `/home` resolves into `/data/home`; a 50 MiB write +

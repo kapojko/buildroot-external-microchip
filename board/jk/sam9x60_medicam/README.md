@@ -7,7 +7,7 @@ RMII Ethernet, USB host + USB device.
 
 Documents in this directory
 ---------------------------
-PLAN_base_image.md   implementation plan, findings (F1..F28), stages, verification
+PLAN_base_image.md   implementation plan, findings (F1..F31), stages, verification
                      matrix. Section 0 holds the working rules for future sessions.
 LOG_base_image.txt   reproducible build/verify log, step by step, with measured
                      values. Update it in the same commit as the stage it documents.
@@ -206,6 +206,17 @@ Every board would otherwise be `sam9x60_medicam` (BR2_TARGET_GENERIC_HOSTNAME),
 so `medicam-hostname.service` (from fs-overlay) renames the board at first boot
 to `medicam-<last 6 hex digits of the eth0 MAC>`, before systemd-networkd starts.
 Fallback when eth0 has no MAC: first 6 hex digits of `/etc/machine-id`.
+
+Ethernet receive-path watchdog (workaround)
+-------------------------------------------
+After a long cable unplug the KSZ8081 can come back with a dead receive path
+(PLAN F31): carrier up, no IPv4, `rx_packets` frozen while TX keeps working and
+all RX error counters 0. `medicam-netwatch.timer` starts
+`medicam-netwatch.sh` once a minute; it exits at once unless carrier is up *and*
+there is no IPv4, then samples `rx_packets` 3 x 10 s and, if frozen, does
+`ip link down`, 10 s, `ip link up`, `networkctl reconfigure` and writes one
+`daemon.err` journal line. It is a workaround - remove the script, the two units
+and the preset line once the driver-level fix lands (PLAN 8.5).
 
 Persistent data
 ---------------

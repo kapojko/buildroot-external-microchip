@@ -1,0 +1,11 @@
+[Unit]
+Description=MediCam eth0 receive-path watchdog (PLAN F31 workaround)
+Documentation=file:/usr/local/sbin/medicam-netwatch.sh
+# Started by medicam-netwatch.timer; do not enable this unit directly.
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/medicam-netwatch.sh
+# worst case: 30 s sampling + 10 s down + 5 s settle
+TimeoutStartSec=90
