@@ -599,12 +599,53 @@ Observations in the stalled state (cable out ~2:30, then plugged back):
   `ip link down/up` with a 1 s gap did not clear it. **Not a usable recovery.**
 * `ip link set eth0 down; sleep 10; ip link set eth0 up`: clean recovery,
   lease in ~1 s, `rx_crc_errors` frozen across a 4 MB scp (md5 ok, ping 20/20).
+* 2026-10-29 evening, a third outcome was observed with the workaround of 8.5
+  active: the same style of unplug cycle did **not** end in a dead RX path but
+  in a **degraded** one. Cable back at 21:14:30 -> `Link is Up`, DHCPv4 lease at
+  21:14:48, i.e. the port looked healed; it was unusable: the application's own
+  log shows TLS handshake timeouts and DNS timeouts (UDP, then TCP) from
+  21:15:16, the client saw ~50 % ICMP loss. Same one-directional error state the
+  hot PHY reset produced (RX_ER/`rx_crc_errors` climbing, TX clean). A manual
+  `down`-10 s-`up` at 21:16:20 fixed it (PHY re-attached 21:16:30, link up
+  21:16:33, lease 21:16:33). No counters were captured in the degraded window.
+* The watchdog did **not** act in that incident, and did not have to by its own
+  rules: at 21:14:45 carrier was up and there was still no IPv4, so it sampled
+  once (run lasted 10 s), saw `rx_packets` advance and exited - "frames are
+  arriving, the lease is just late"; one minute later IPv4 was present, so it
+  fast-exited. Its journal shows no lines because it never reached the recovery
+  path: `logger`/`/dev/log` work (a test line appears immediately), so the empty
+  `journalctl -t medicam-netwatch` proves "did nothing", not a logging fault.
 
 Conclusion so far: the receive path is wedged inside the KSZ8081 after a long
 absence of link, and only a PHY re-initialisation with the line idle clears it.
 Silicon/analogue state (receive PLL / adaptive equaliser) is the prime suspect.
 Deferred: Microchip FAE/errata question and a driver-level reset on carrier
 loss; until then the watchdog of 8.5 stays in the image.
+
+Diagnostics to run when picked up (next session):
+0. `systemctl stop medicam-netwatch.timer` first when measuring by hand -
+   otherwise it acts on the stall and hides the outcome.
+1. Instrument the exits before anything else: one journal line per run with
+   `carrier`, whether IPv4 is present, and `rx_packets`/`rx_crc_errors` at entry
+   and exit. Today we cannot say why a given run did nothing; the
+   instrumentation is cheap and makes every later experiment self-documenting.
+2. Teach the detector the **degraded** state, which is the state the operator
+   actually suffers: carrier up + IPv4 up is *not* healthy when
+   `rx_crc_errors` advances (measured ~1.6/s). Sample it over ~30 s and treat
+   growth as a fault requiring recovery.
+3. Make the recovery verify itself: after `up`, wait for carrier, sample
+   `rx_packets` and `rx_crc_errors`; clean = rx advancing and crc frozen. If not,
+   repeat (max 2-3 attempts) and log each attempt with the counters.
+4. Repeat the unplug cycle with the timer stopped and capture, at the moment the
+   link returns: `rx_packets`, `rx_crc_errors`, `rx_errors` twice 10 s apart,
+   `ethtool eth0`, `ip -4 addr`. Classify the outcome (dead / degraded / clean)
+   and how often each occurs - today all three were seen.
+5. Test the action variants for the degraded state: `down`/`up` with 10 s vs
+   30 s, with and without `networkctl reconfigure`, and with no ICMP traffic
+   during the recovery (does traffic during PHY re-lock cause the degradation?).
+6. Only after 2-3 are in place: re-run the field scenario (cable out ~2:30,
+   watchdog enabled) and check that the journal now explains every run and that
+   the port ends up clean without the operator.
 
 ---
 
@@ -909,6 +950,15 @@ Cost per event: ~90 s to detect + ~12 s link down; every TCP session and stream
 on eth0 drops. Limits: it masks the defect (one journal line per event is the
 counter — zero lines over N days is the test result) and it assumes a
 DHCP-configured eth0.
+
+**Known deficiency (2026-10-29, measured):** the detector knows one signature
+only - carrier up, no IPv4, `rx_packets` frozen. A stall can end **by itself**
+(or on the cable replug) in the degraded state of F31: carrier up, IPv4
+acquired, ~50 % loss, `rx_crc_errors` climbing. The script ignores that
+completely; in the first field incident it fast-exited for the whole window and
+the operator had to run `down`/`up` by hand. It also logs nothing about a run it
+skipped, so a silent watchdog cannot be told from a broken one. Both are open
+items, see the diagnostics list in F31.
 
 Retire it when the driver-level fix (reset the PHY on carrier loss, while the
 line is idle) has been validated over repeated flaps.
