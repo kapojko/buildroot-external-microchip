@@ -734,3 +734,30 @@ Conventions
         b) /usr/lib/systemd/system/medicam.service (from the DeviceProc
            installer) is mode 0755 -> "marked executable. Please remove
            executable permission bits." Fix in the app installer (chmod 644).
+11.8 [x] STATIC VERIFICATION (2026-10-29) - not a "it rebooted" sample. The
+        effective ordering graph of ALL loaded units was dumped from the board
+        (systemctl show -p Id -p After -p Before -- <all units>; effective means
+        drop-ins and the implicit default dependencies are already merged, i.e.
+        exactly what the boot transaction is built from) and searched for
+        elementary cycles:
+          loaded units 162, ordering edges 453, unresolved names 0,
+          ordering cycles 0 (touching medicam-*: 0)
+        Because the graph is acyclic, every subgraph is acyclic - and a boot
+        transaction IS a subgraph - so no ordering between boot and
+        multi-user.target can hit a cycle, independently of which jobs happen
+        to be queued.
+        Sensitivity of the checker proven on the same graph: substituting the
+        pre-fix ordering of medicam-data.service (DefaultDependencies=yes =>
+        After=basic.target) yields 50 cycles, shortest
+          medicam-data.service -> local-fs.target -> sysinit.target ->
+          medicam-data.service
+        plus the chain printed in 11.2, so it does detect the field bug.
+        Tool: check-boot-order.sh + check-boot-order.py, host-side (the target
+        has no python3); one ssh call, no per-unit loop (162 systemctl calls
+        took ~40 s, one call is instant):
+          ./check-boot-order.sh root@192.168.3.17    -> exit 0
+          ./check-boot-order.sh -f graph.txt old     -> exit 1
+        LIMITS: covers loaded units only (re-run after adding a unit that is
+        pulled in at boot; a unit that is not loaded cannot get a job and so
+        cannot be in a cycle), and it proves ORDERING, not runtime success -
+        a failing ubiattach is still a plain unit failure, not a silent skip.

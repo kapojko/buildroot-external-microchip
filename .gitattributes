@@ -49,3 +49,4 @@ configs/post-build*.sh               text eol=lf executable
 motd                                 text eol=lf
 sshd_config                          text eol=lf
 
+*.py                                 text eol=lf

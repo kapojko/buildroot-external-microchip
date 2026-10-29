@@ -235,6 +235,27 @@ Quick check after any change to the boot-time units:
     journalctl -b | grep -c 'ordering cycle'        # must be 0
     systemctl is-active medicam-data.service data.mount medicam-data-init.service
 
+Checking boot ordering (PLAN F29)
+---------------------------------
+A reboot is **not** evidence that the ordering graph is sane: systemd breaks an
+ordering cycle by deleting one job, and which job it deletes is not stable. So
+there is a static check:
+
+    ./check-boot-order.sh root@192.168.3.17        # dump over ssh, then analyse
+    sshpass -p 1 ./check-boot-order.sh root@...    # password auth
+    ./check-boot-order.sh -f graph.txt             # analyse a saved dump
+    ./check-boot-order.sh -f graph.txt old         # regression test of the
+                                                   # checker (pre-fix unit)
+
+It dumps the **effective** `After=`/`Before=` of every loaded unit (drop-ins and
+implicit default dependencies already merged - exactly what the boot transaction
+is built from), builds the "must start before" digraph and reports elementary
+cycles: `0 = clean`, `1 = cycles found`, `2 = dump/analysis error`. Run it after
+touching any `*.service`/`*.mount`/preset and once on a freshly flashed image.
+It runs on the host (the target has no python3, only `systemctl` is needed).
+Reference result (2026-10-29, NAND boot): 162 units, 453 edges, 0 unresolved,
+**0 cycles**; the same graph with the pre-fix `medicam-data.service` yields 50.
+
 MCU temperature (there is no on-die sensor)
 -------------------------------------------
 The SAM9X60 has **no temperature sensor at all** - not disabled, absent. PLAN
@@ -444,6 +465,9 @@ uboot-nand.fragment            U-Boot fragment: ENV in NAND at 0x140000/0x100000
                                frozen fallback bootargs/bootcmd
 sam-ba-flash-nand.ps1          SAM-BA recovery flash (PowerShell, PLAN F4)
 post-build.sh                  rootfs post-build: /home -> data/home symlink
+check-boot-order.sh            host-side ordering-cycle check for a running
+check-boot-order.py            board (PLAN F29): dump the unit graph, report
+                               cycles; "old" mode re-creates the pre-fix bug
 fs-overlay/                    rootfs overlay: sshd_config, journald.conf.d,
                                motd, medicam-hostname/identity/data services +
                                helpers, systemd preset, /data mount point

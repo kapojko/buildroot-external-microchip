@@ -906,7 +906,7 @@ possible later alternative (F20) — not implemented now.
 | Wi-Fi | `rfkill list`; `iw dev`; RT5370 plugged → `wlan0` present; `wpa_supplicant` associates |
 | NAND geometry | `mtdinfo /dev/mtd0` → erasesize 262144, pagesize 4096, oobsize **224**; `dmesg \| grep -i pmecc` |
 | NAND data | `mount \| grep /data`; 50 MiB write, reboot, read-back |
-| Boot transaction after a reboot | `journalctl -b \| grep -c 'ordering cycle'` → **0**; `systemctl is-active medicam-data.service data.mount medicam-data-init.service` → active ×3; every unit with `RequiresMountsFor=/data` started on its own (F29) |
+| Boot transaction after a reboot | `journalctl -b \| grep -c 'ordering cycle'` → **0**; `systemctl is-active medicam-data.service data.mount medicam-data-init.service` → active ×3; every unit with `RequiresMountsFor=/data` started on its own. **Static, and the real criterion:** `./check-boot-order.sh root@<board>` → exit 0 (162 units / 453 edges / 0 cycles as of 2026-10-29) — a reboot alone is not evidence, systemd breaks cycles by deleting a job at random (F29) |
 | NAND boot | SD removed: `RomBOOT` → bootstrap → U-Boot → kernel → systemd |
 | Layout consistency | `git grep -n "0x[aA]00000\|numpebs\|mtdparts"` — DTS, env, genimage and flash script must agree |
 
