@@ -513,6 +513,61 @@ ordered before `local-fs.target` has to use `DefaultDependencies=no`** — with
 the default dependency set it is ordered after `basic.target` and can never be
 placed before the boot's filesystem targets.
 
+**F30 — DHCPv4 lease is not reacquired (or takes minutes) after a cable
+re-plug (open, systemd-networkd side).** Measured on the board 2026-10-29
+(NAND boot, `systemd-networkd` 256, `ClientIdentifier=mac` drop-in per 8.4):
+the user application's Ethernet-unplug/re-plug edge test showed that after the
+cable is removed and plugged back, the board can sit **without an IPv4 address
+for minutes** even though carrier is up. Journal timeline of the first
+occurrence:
+
+```
+17:11:09  eth0: Lost carrier          ← cable removed (~2 min)
+17:11:09  eth0: DHCP lease lost
+17:13:12  eth0: Gained carrier        ← cable re-plugged; NO lease follows
+                                      (2.5 min of nothing; board unreachable,
+                                       absent from ARP on all of 192.168.3.0/24)
+17:15:41  eth0: Lost carrier          ← cable re-seated (second flap)
+17:15:44  eth0: Gained carrier
+17:15:49  eth0: DHCPv4 address 192.168.3.18/24 acquired   ← lease in 5 s
+```
+
+A second controlled cycle reproduced the stall: after a ~60 s unplug and a
+firm re-plug the board stayed unreachable for >2 min. So the recovery is
+**not** the clean "carrier up → lease in seconds" path; it appears the DHCPv4
+client state machine does not restart (or restarts only after an extra carrier
+flap) when carrier is regained after `DHCP lease lost`.
+
+What rules in/out:
+* Router side unlikely: the same router leases in ~5 s after the second flap,
+  and the boot-time lease is quick too; other hosts keep their leases.
+* `ClientIdentifier=mac` is already set, so the F24-era DUID lease churn does
+  not apply here.
+* Not yet captured: whether networkd sends DHCPDISCOVER during the gap (needs
+  `networkd` debug logging or a packet capture on a always-on LAN host), and
+  whether the stall also happens when the re-plug is >x s after the unplug
+  (lease-expiry vs. carrier-flap timing).
+
+Diagnostics to run when picked up (board + a LAN witness host running
+tcpdump):
+1. `LogLevelMax=debug` drop-in for `systemd-networkd.service`, repeat
+   unplug/re-plug, save the journal (volatile — copy it off before rebooting).
+2. Capture `udp port 67 or udp port 68` on the witness host during the gap:
+   DISCOVER sent but no OFFER = router/relay side; no DISCOVER at all =
+   networkd client stuck.
+3. Try `ManageForeignRoutes`/carrier-cost red herrings aside, check if the
+   stall disappears with `KeepConfiguration=` unset/set, and whether
+   `networkctl renew eth0` (or a `networkctl reload`) recovers it — that
+   suggests a watch/link-state bug rather than the DHCP engine.
+
+Workaround for the field until fixed: the application already keeps polling
+silently and resumes cleanly the moment the address appears; a delayed lease
+only delays re-registration, it does not require a reboot. Possible BSP-level
+mitigation if the stall is confirmed: a tiny oneshot triggered by
+`ExecStartPost`/`networkctl renew eth0` on carrier-up (or run networkd's DHCP
+client with a shorter `RetryOnFailure`-style backoff where supported by
+systemd 256).
+
 ---
 
 ## 5. Decisions (locked)
