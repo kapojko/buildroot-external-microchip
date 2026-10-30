@@ -7,5 +7,6 @@ After=network.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/medicam-netwatch.sh
-# worst case: 30 s sampling + 10 s down + 5 s settle
-TimeoutStartSec=90
+# worst case: one 30 s window + down 10 s + verify 30 s + retry 30 s down
+# + verify 30 s, plus the carrier wait
+TimeoutStartSec=180

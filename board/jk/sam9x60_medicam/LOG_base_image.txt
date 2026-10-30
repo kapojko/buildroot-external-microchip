@@ -859,14 +859,80 @@ Conventions
         d) ip link down; 10 s; up (+ networkctl reconfigure): clean; lease in
            ~1 s; rx_crc_errors frozen (923 -> 923 across a 4 MB scp, md5
            identical, ping 20/20, tx_errors 0, collisions 0). Chosen action.
-13.3 [x] WORKAROUND in the tree (not yet in a built image): medicam-netwatch.sh
-        + .service (Type=oneshot, TimeoutStartSec=90) + .timer (OnBootSec=180s,
-        OnUnitActiveSec=60s), enabled by 85-medicam.preset. Fast exit when
-        carrier is down or IPv4 is present; otherwise 3 x 10 s rx_packets
-        samples; frozen -> down, 10 s, up, networkctl reconfigure, one
-        daemon.err journal line. Installed by hand on the board 2026-10-29,
-        image rebuild deferred (owner's decision).
+13.3 [x] WORKAROUND v2 in the tree and installed on the board (2026-10-30).
+        v1 knew only "carrier up + no IPv4 + rx_packets frozen", slept 3 x 10 s
+        inside the run and fast-exited as soon as IPv4 was present, so it
+        ignored the degraded state seen on 10-29 evening. v2 keeps the previous
+        counters+timestamp in /run/medicam-netwatch.state and measures a real
+        window on every 30 s run:
+          dead  = carrier==1 && rx_d==0 && tx_d>0, armed by had_v4/rx_moved
+                  (or by <=2 boot-phase actions in the first 10 min)
+                  -> 2 hits in the last 3 windows
+          dirty = crc_d>=5 && (crc_d >= 5% of (crc_d+rx_d) || crc_d>=15)
+                  -> 3 hits in the last 5 windows
+        Recovery: down 10 s, up, networkctl reconfigure, then a 30 s
+        verification window (RX moving, CRC flat), one retry with 30 s down,
+        then a 3-actions/30 min budget and "giving up" (a bad cable must not
+        become a flapping link). rx_d==tx_d==0 is "no evidence" and keeps the
+        strike history; a negative delta or a missing state file only
+        re-baselines. Anomalous windows log rx_d/tx_d/crc_d at daemon.info,
+        actions at daemon.err and also to /data/var/log/netwatch.log; healthy
+        runs are silent. .service TimeoutStartSec=180, .timer OnBootSec=180s /
+        OnUnitActiveSec=30s. Exercised end-to-end on the board (13.5e).
 13.4 [ ] DEFERRED: root cause (KSZ8081 receive PLL / adaptive equaliser after a
         long link absence; Microchip FAE or errata question) and the
         driver-level fix (reset the PHY on carrier loss, while the line is
         idle). The watchdog stays in the image until then.
+
+13.5 [x] 2026-10-30 SESSION: COUNTER SEMANTICS, HEALTHY BASELINE, STUCK-STATE
+        REPRODUCTION, WATCHDOG v2 VALIDATION
+        a) PLATFORM FACTS. The MAC is cdns,sam9x60-macb - MACB, not GEM - so
+           "ethtool -S eth0" returns "no stats available" (the macb driver has
+           no ethtool stats) and sysfs counters are the only source.
+           rx_crc_errors is dev->stats.rx_crc_errors = hw_stats.macb.
+           rx_fcs_errors (MACB RXFCSE). rx_errors is the sum of FCS +
+           alignment + resource + overrun + oversize + jabber + undersize +
+           length errors.
+        b) HEALTHY BASELINE (NAND boot, 10 s samples): rx_crc_errors 0 for the
+           whole 4 min window, and still 0 across a 20 s SSH transfer at
+           ~1.5 kpps (rx_packets 2405 -> 35955). Idle rx_packets 0.7-4.8/s;
+           carrier_changes stable. Under that load rx_errors grew 0 -> 22, all
+           of it rx_over_errors (RX resource / no buffer), so rx_errors is
+           unusable as a corruption signature - the detector uses CRC only.
+        c) ANOMALY, separate ticket: rx_dropped grows ~0.45/s on an otherwise
+           healthy link, independent of traffic. The only such path in this
+           driver is netdev_alloc_skb() returning NULL in macb_rx_frame().
+           Not CRC, not PHY.
+        d) REPRODUCING THE STUCK STATE WITHOUT PHYSICAL ACCESS:
+           - PHY soft reset (BMCR 0x8000) on a healthy link: no effect
+             (crc 0, 74/74 pings, carrier_changes unchanged).
+           - PHY power-down (BMCR bit 11) held 150 s: the PHY reported link
+             down but the driver's carrier stayed 1 (it never saw the change);
+             after power-up the link was clean.
+           - autoneg off + force 100M full (BMCR 0x2100) held 150 s, then
+             autoneg restored: PHY reports link up (BMSR 0x786D), ethtool
+             "Link detected: yes", IPv4 lease still valid, rx_packets frozen,
+             tx_packets advancing, rx_crc_errors 0 -> the F31 signature.
+             Frozen windows measured: 481 s and 135 s.
+           - two further PHY soft resets did NOT clear that state; only
+             "ip link down; 10 s; up; networkctl reconfigure" did (lease back
+             in ~5 s, crc 0, 0% loss). Note: manual BMSR reads clear the PHY
+             latch bits, so carrier can read 1 while the PHY is down - a probe
+             artifact, but it also means no rule may depend on carrier
+             transitions alone.
+        e) WATCHDOG v2 VALIDATION. With the state file armed (had_v4=1,
+           rx_moved=1) the RX path was cut by clearing MAC RXEN
+           (NCR 0x1C -> 0x18). Journal:
+             09:23:47 window 31s rx_d=0 tx_d=21 ... dead=1/1 dirty=0/0
+             09:24:18 window 31s rx_d=0 tx_d=27 ... dead=3/2 dirty=0/0
+             09:24:18 RX frozen (dead=3/2), reopening link: down 10s
+             09:25:01 recovered after 10s down: rx 38035->38114 crc 0->0
+                      carrier=1 v4=yes
+           Detection took two windows with a *valid IPv4 lease* (the case v1
+           ignored), the action was persisted to /data/var/log/netwatch.log,
+           the 30 s verification passed and the port came back clean: fault ->
+           recovered in ~110 s. No action was taken while healthy, nor while
+           RX was alive under forced 100F/no-autoneg.
+        f) NOT YET EXERCISED: the dirty rule (no way to inject FCS errors) and
+           the boot-phase allowance. Both reuse the tested code paths; the
+           dirty thresholds rest on (b) and on the 2026-10-29 degraded episode.

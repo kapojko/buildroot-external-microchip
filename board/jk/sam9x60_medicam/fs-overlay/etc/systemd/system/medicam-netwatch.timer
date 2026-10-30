@@ -1,11 +1,11 @@
 [Unit]
-Description=Run the MediCam eth0 receive-path watchdog every 60 s
+Description=Run the MediCam eth0 receive-path watchdog every 30 s
 Documentation=file:/usr/local/sbin/medicam-netwatch.sh
 
 [Timer]
-# 180 s so a slow DHCP server at boot is not mistaken for a stalled port
+# 180 s so boot-time DHCP/STP transients are not mistaken for a stalled port.
 OnBootSec=180s
-OnUnitActiveSec=60s
+OnUnitActiveSec=30s
 AccuracySec=1s
 Unit=medicam-netwatch.service
 

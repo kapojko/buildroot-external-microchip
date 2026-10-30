@@ -622,30 +622,22 @@ Silicon/analogue state (receive PLL / adaptive equaliser) is the prime suspect.
 Deferred: Microchip FAE/errata question and a driver-level reset on carrier
 loss; until then the watchdog of 8.5 stays in the image.
 
-Diagnostics to run when picked up (next session):
-0. `systemctl stop medicam-netwatch.timer` first when measuring by hand -
-   otherwise it acts on the stall and hides the outcome.
-1. Instrument the exits before anything else: one journal line per run with
-   `carrier`, whether IPv4 is present, and `rx_packets`/`rx_crc_errors` at entry
-   and exit. Today we cannot say why a given run did nothing; the
-   instrumentation is cheap and makes every later experiment self-documenting.
-2. Teach the detector the **degraded** state, which is the state the operator
-   actually suffers: carrier up + IPv4 up is *not* healthy when
-   `rx_crc_errors` advances (measured ~1.6/s). Sample it over ~30 s and treat
-   growth as a fault requiring recovery.
-3. Make the recovery verify itself: after `up`, wait for carrier, sample
-   `rx_packets` and `rx_crc_errors`; clean = rx advancing and crc frozen. If not,
-   repeat (max 2-3 attempts) and log each attempt with the counters.
-4. Repeat the unplug cycle with the timer stopped and capture, at the moment the
-   link returns: `rx_packets`, `rx_crc_errors`, `rx_errors` twice 10 s apart,
-   `ethtool eth0`, `ip -4 addr`. Classify the outcome (dead / degraded / clean)
-   and how often each occurs - today all three were seen.
-5. Test the action variants for the degraded state: `down`/`up` with 10 s vs
-   30 s, with and without `networkctl reconfigure`, and with no ICMP traffic
-   during the recovery (does traffic during PHY re-lock cause the degradation?).
-6. Only after 2-3 are in place: re-run the field scenario (cable out ~2:30,
-   watchdog enabled) and check that the journal now explains every run and that
-   the port ends up clean without the operator.
+Status 2026-10-30 (details in LOG 13.5). Done: every anomaly is instrumented
+(`rx_d/tx_d/crc_d` per window); the detector knows the degraded state (dirty
+rule); the recovery verifies itself; the healthy baseline was measured (CRC 0
+over 4 min idle and over 20 s at ~1.5 kpps - note `rx_errors` grows under load,
+all of it `rx_over_errors`, so CRC is the only clean signature); the stuck state
+was reproduced without physical access and recovered by the watchdog. Still open:
+a *degraded* sample (needs a physical unplug and, per the experiment above, a
+PHY soft reset while the line is idle) and the action-variant matrix (10 s vs
+30 s, with/without traffic). New facts that constrain the detector: this SoC's
+MAC is `cdns,sam9x60-macb` (MACB, not GEM) and `ethtool -S` has no stats at all,
+so sysfs counters are the only source; `carrier` can stay 1 for minutes while
+the PHY reports link down (manual BMSR reads clear the latches), so no rule may
+depend on carrier transitions alone; a PHY soft reset did **not** clear the
+synthetic stuck state, only `ip link down/up` did; `rx_dropped` climbs ~0.45/s
+on a healthy link through the `netdev_alloc_skb()` NULL path in
+`macb_rx_frame()` (separate anomaly, not CRC/PHY).
 
 ---
 
@@ -931,34 +923,49 @@ whenever the SD card is rewritten — unacceptable for "target the board as
    `medicam-48db74`, with zero EEPROM rewrites (LOG 7.15). The blank-record path
    works but is only proven manually — test it on a spare board.
 
-### 8.5 eth0 receive-path watchdog (F31 workaround) — **[x] implemented 2026-10-29**
+### 8.5 eth0 receive-path watchdog (F31 workaround) — **[x] v2, 2026-10-30**
 
-Files: `fs-overlay/usr/local/sbin/medicam-netwatch.sh`,
-`etc/systemd/system/medicam-netwatch.service` (`Type=oneshot`,
-`TimeoutStartSec=90`), `etc/systemd/system/medicam-netwatch.timer`
-(`OnBootSec=180s`, `OnUnitActiveSec=60s`), enabled by `85-medicam.preset`
-(`enable medicam-netwatch.timer`).
+Files: `medicam-netwatch.sh` (+ `.service`, `.timer`), enabled by
+`85-medicam.preset`.
 
-Logic: fast exit when carrier is down or when carrier **and** IPv4 are present;
-otherwise sample `rx_packets` three times 10 s apart and exit as soon as it
-advances; if all three samples are equal, `ip link down`, 10 s, `ip link up`,
-`networkctl reconfigure`, and one `daemon.err` journal line with the counters
-before and after. No state file, no backoff. The timer cannot overlap runs:
-starting an already-active oneshot unit is a no-op in systemd.
+v1 knew one signature only (carrier up, no IPv4, `rx_packets` frozen) and slept
+inside the run, so it ignored the *degraded* state (IPv4 present, CRC errors
+growing) and could not tell a healthy quiet link from a dead one. v2 keeps the
+previous run's counters and timestamp in `/run/medicam-netwatch.state` (tmpfs,
+RAM only) and evaluates a real 20-300 s window on every 30 s run, without
+sleeping in the healthy path:
 
-Cost per event: ~90 s to detect + ~12 s link down; every TCP session and stream
-on eth0 drops. Limits: it masks the defect (one journal line per event is the
-counter — zero lines over N days is the test result) and it assumes a
-DHCP-configured eth0.
+| signature | condition | trigger |
+|---|---|---|
+| dead | `carrier==1 && rx_d==0 && tx_d>0`, armed by `had_v4`/`rx_moved` (or the boot-phase allowance) | 2 hits in the last 3 windows |
+| dirty | `crc_d>=5` and (`crc_d` >= 5 % of `crc_d+rx_d` or `crc_d>=15`, i.e. >=0.5 err/s) | 3 hits in the last 5 windows |
 
-**Known deficiency (2026-10-29, measured):** the detector knows one signature
-only - carrier up, no IPv4, `rx_packets` frozen. A stall can end **by itself**
-(or on the cable replug) in the degraded state of F31: carrier up, IPv4
-acquired, ~50 % loss, `rx_crc_errors` climbing. The script ignores that
-completely; in the first field incident it fast-exited for the whole window and
-the operator had to run `down`/`up` by hand. It also logs nothing about a run it
-skipped, so a silent watchdog cannot be told from a broken one. Both are open
-items, see the diagnostics list in F31.
+`had_v4`, `rx_moved` and `bootacts` are sticky for the boot; `bootacts` allows at
+most 2 actions in the first 600 s, so a board that boots into the stuck state is
+still recovered while a clean link with no DHCP server is otherwise left alone.
+The counters are deltas of `rx_packets`, `tx_packets`, `rx_crc_errors`. A
+negative delta (32-bit counter wrap, our own ifdown) or a missing state file
+means "start a new baseline", never "frozen". A window with `rx_d==tx_d==0` is
+"no evidence" and does not decay the strike history (networkd's DHCP backoff
+would otherwise mask a dead RX path).
+
+Recovery: `ip link down`, 10 s, `ip link up`, `networkctl reconfigure`, then a
+30 s verification window (RX moving and CRC flat; IPv4 is a bonus, not the
+criterion). One retry with 30 s down, then the action budget (3 actions per
+30 min) logs "giving up" and stops - a bad cable must not become a flapping
+link. Every anomalous window logs `rx_d/tx_d/crc_d` at `daemon.info`, actions at
+`daemon.err`, and actions are also appended to `/data/var/log/netwatch.log`
+(journald is volatile). Healthy runs are silent, so "no lines" is the result.
+
+Cost per event: 60-150 s to detect + 10 s link down + 30 s verification; every
+TCP session on eth0 drops. Limits: it masks the defect (the journal is the
+counter) and it assumes DHCP, or at least a link where RX was seen to work.
+
+Validated on hardware 2026-10-30 (LOG 13.5): the dead rule fired with a *valid
+IPv4 lease* (the case v1 ignored), the action and its verification were logged,
+and `ip link down/up` recovered the port. The dirty rule could not be exercised
+yet - there is no way to inject FCS errors - so its thresholds rest on the
+measured healthy baseline (CRC 0) and the 2026-10-29 degraded episode.
 
 Retire it when the driver-level fix (reset the PHY on carrier loss, while the
 line is idle) has been validated over repeated flaps.

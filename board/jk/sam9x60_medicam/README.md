@@ -209,14 +209,35 @@ Fallback when eth0 has no MAC: first 6 hex digits of `/etc/machine-id`.
 
 Ethernet receive-path watchdog (workaround)
 -------------------------------------------
-After a long cable unplug the KSZ8081 can come back with a dead receive path
-(PLAN F31): carrier up, no IPv4, `rx_packets` frozen while TX keeps working and
-all RX error counters 0. `medicam-netwatch.timer` starts
-`medicam-netwatch.sh` once a minute; it exits at once unless carrier is up *and*
-there is no IPv4, then samples `rx_packets` 3 x 10 s and, if frozen, does
-`ip link down`, 10 s, `ip link up`, `networkctl reconfigure` and writes one
-`daemon.err` journal line. It is a workaround - remove the script, the two units
-and the preset line once the driver-level fix lands (PLAN 8.5).
+The KSZ8081 receive path has two field failure modes (PLAN F31):
+
+* **stuck** - carrier up, `rx_packets` frozen, TX still advancing, no IPv4
+  (or a stale one);
+* **degraded** - frames do arrive, but `rx_crc_errors` keeps growing and the
+  port loses a large fraction of the traffic; it can even hold a DHCP lease
+  from a short good window.
+
+`medicam-netwatch.timer` starts `medicam-netwatch.sh` every 30 s. The script
+keeps the previous run's counters and timestamp in
+`/run/medicam-netwatch.state`, so every run measures a real window instead of
+sleeping inside the run:
+
+* **dead** - carrier up, `rx_d == 0`, `tx_d > 0`; 2 hits in the last 3 windows.
+  Armed only after RX was seen to move or a DHCP lease was obtained, so a clean
+  link without a DHCP server is left alone; a board that boots straight into
+  the stuck state is covered by a small boot-phase allowance.
+* **dirty** - `rx_crc_errors` >= 5 per window and either >5 % of the received
+  attempts or >= 0.5 err/s; 3 hits in the last 5 windows.
+
+On a hit: `ip link down`, 10 s, `ip link up`, `networkctl reconfigure`, then the
+result is verified over 30 s (RX moving, CRC flat), with one retry using a 30 s
+down period. After 3 actions in 30 minutes the script logs "giving up" and stops
+touching the link - a bad cable must not become a flapping link. Actions go to
+the journal and to `/data/var/log/netwatch.log`; healthy runs are silent.
+
+It is a workaround - remove the script, the two units and the preset line once
+the driver-level fix lands (PLAN 8.5). The tunables are the constants at the top
+of the script (overridable from the environment for a one-off run).
 
 Persistent data
 ---------------
