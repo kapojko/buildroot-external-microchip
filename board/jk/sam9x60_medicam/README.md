@@ -490,26 +490,33 @@ hardcoded index, and sizes the `data` volume to the rest of the UBI region.
 
 Changing the NAND density (2 / 4 / 8 Gbit)
 ------------------------------------------
-* **8 Gbit <-> 4 Gbit: a size change only** (same geometry, recommended path).
-  The current MT29F8G08ABACAWP and the production MT29F4G08ABACA-class both are
-  4 KiB page / 256 KiB block / OOB 224. Everything transfers; the UBI region
-  grows/shrinks. In the tree (8 Gbit test bed) the ubi partition is
-  `0xa00000..0x40000000` = `0x3f600000`. For 4 Gbit change exactly three
-  numbers:
+* **8 Gbit <-> 4 Gbit: a size change plus one OOB scalar** (recommended path).
+  Page/block/PEB/LEB stay (4 KiB page / 256 KiB block), but every *live* 4 Gbit
+  4 KiB-page part is **4096+256**, not the 224-byte spare of the 8 Gbit test bed
+  (the 224-spare 4 Gbit parts, `MT29F4G08ABAEA`, are EOL - Micron PCN 34679). So
+  four edits, not three (`README_FLASH.md` §8.4):
+  - `at91bootstrap_nand.fragment`: `CONFIG_PMECC_OOB_224` -> `OOB_256`
+    (eccOffset 120 -> 152; skipping this makes the ROM decode page 0 with the
+    wrong spare size -> silent no-boot);
   - DTS: `ubi@a00000` reg -> `<0xa00000 0x1f600000>` (ends at `0x20000000`);
   - `genimage-nand.cfg`: flash `numpebs = 2048` (WHOLE 4 Gbit die; 4096 for the
     8 Gbit test bed) and the `ubi` partition size -> `0x1f600000`;
   - `flash-nand.sh`: `rootfs|...|4056|ubi` -> `2024` (the UBI-region PEB count
-    `0x1f600000 / 0x40000 = 2024`, distinct from genimage's whole-die numpebs).
+    `0x1f600000 / 0x40000 = 2024`, distinct from genimage's whole-die numpebs),
+    plus the rootfs volume size (300 MiB is ~9x the 33 MB image; ~150 MiB on a
+    4 Gbit die leaves `/data` ~325 MiB).
+  Part choice and why: `README_FLASH.md` §8.
 * **2 Gbit (e.g. MT29F2G08ABAEAWP): a geometry change, not a size change.**
   Measured from the datasheet: 2,112-byte page (2,048 + 64), 128 KiB block -
   i.e. 2 KiB page / 64 B OOB / 128 KiB block. That invalidates the whole
   stage-2 stack built here: bootstrap PMECC (different OOB/page => eccOffset
   and the PMECC_OOB_* config), UBI geometry (PEB 128 KiB, LEB 0x1f000,
   min-I/O 2 KiB, numpebs ~1968, vid-header-offset), genimage flash geometry,
-  and it cannot be validated on the 8 Gbit board at all. Avoid unless the
-  board is re-designed around it; if it is ever needed, do it as a separate
-  configuration, never by editing this one.
+  and it cannot be validated on the 8 Gbit board at all. That part
+  (`MT29F2G08ABAEAWP-IT:E`) is also EOL and 256 MiB total leaves no growth room
+  (`README_FLASH.md` §8.2/§8.3). Avoid unless the board is re-designed around
+  it; if it is ever needed, do it as a separate configuration, never by editing
+  this one.
 
 Layout of this directory
 ------------------------
