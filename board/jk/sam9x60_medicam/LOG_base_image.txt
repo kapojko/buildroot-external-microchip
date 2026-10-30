@@ -936,3 +936,17 @@ Conventions
         f) NOT YET EXERCISED: the dirty rule (no way to inject FCS errors) and
            the boot-phase allowance. Both reuse the tested code paths; the
            dirty thresholds rest on (b) and on the 2026-10-29 degraded episode.
+
+13.6 [x] 2026-10-30 IMAGES: incremental rebuild (no clean, no host rebuild).
+        Only the fs-overlay changed, so package/kernel/U-Boot/AT91Bootstrap
+        stamps were untouched; the SD output/.config was re-applied from
+        sam9x60_medicam_defconfig (it had been stale since 2026-07-27) and
+        output/build/buildroot-config/auto.conf was verified unchanged before
+        the build (same md5, same 131 .stamp_built), so nothing was recompiled.
+        SD: 41 s, NAND: 38 s; the rescue card was regenerated with
+        make-rescue-sd.sh (mtools). New manifest
+        board/jk/sam9x60_medicam/MD5SUMS; copy in
+        S:\Platy\MediCam_1.0\BSP\Build 2026-10-30 (MD5SUMS + README.txt).
+        Note: the previously committed MD5SUMS was stale for
+        output-nand/images/{u-boot.bin,boot.bin.pmecc} - those files had not
+        changed since 2026-10-29 23:19, the manifest had older values.
