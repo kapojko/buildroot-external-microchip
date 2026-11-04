@@ -1,0 +1,53 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+#
+# flash-nand — field entry point for programming the on-board NAND.
+#
+# The real provisioning script lives on the FAT boot partition of the rescue SD
+# card, next to the NAND payloads (see make-rescue-sd.sh), and is reachable only
+# once that partition is mounted. U-Boot loads zImage and the DTB from that
+# partition directly, so nothing mounts it during boot: on a freshly booted
+# rescue card /boot is an empty directory of the rootfs and /boot/flash-nand.sh
+# appears to be missing. That is the chicken-and-egg this wrapper breaks — it
+# mounts the FAT partition, then hands over to the real script.
+#
+# Usage (all arguments are passed through unchanged):
+#   flash-nand                # flash everything (confirmation prompt)
+#   flash-nand all            # flash everything, no prompt
+#   flash-nand bootstrap      # only at91bootstrap
+#   flash-nand uboot|env|dtb|kernel|rootfs
+#
+# The real script has its own ensure_boot(); once /boot is mounted here that is
+# a no-op.
+
+set -eu
+
+BOOT=/boot
+REAL="$BOOT/flash-nand.sh"
+
+die() { echo "flash-nand: ERROR: $*" >&2; exit 1; }
+log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
+
+is_mounted() {
+    if command -v mountpoint >/dev/null 2>&1; then
+        mountpoint -q "$BOOT" && return 0
+    fi
+    grep -q " $BOOT " /proc/mounts
+}
+
+if ! is_mounted; then
+    mkdir -p "$BOOT"
+    for p in /dev/mmcblk0p1 /dev/mmcblk1p1; do
+        [ -b "$p" ] || continue
+        if mount "$p" "$BOOT" 2>/dev/null; then
+            log "mounted $p at $BOOT"
+            break
+        fi
+    done
+fi
+
+[ -f "$REAL" ] || die "no rescue SD card mounted at $BOOT ($REAL missing).
+       Insert the card built by make-rescue-sd.sh and retry, or mount the
+       partition by hand: mount -t vfat /dev/mmcblk0p1 $BOOT"
+
+exec "$REAL" "$@"

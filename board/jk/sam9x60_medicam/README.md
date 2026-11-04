@@ -235,6 +235,19 @@ down period. After 3 actions in 30 minutes the script logs "giving up" and stops
 touching the link - a bad cable must not become a flapping link. Actions go to
 the journal and to `/data/var/log/netwatch.log`; healthy runs are silent.
 
+Both states are one defect, and it is **per unit** (measured 2026-11-04, LOG
+13.7): the *degraded* variant appears only with some link partners and stays for
+as long as that partner is connected. With a Mikrotik hEX as partner, board #3
+corrupts ~50 % of received frames on `ether3` and 66 % on `ether4` (and gets no
+DHCP lease at all), while a second MediCam board (#2) and three other receivers
+- a Realtek FE NIC, an i.MX board with the same KSZ8081 and another MediCam unit
+- are 100 % clean on the very same port, cable and configuration. So: a board
+that corrupts frames with one switch and is clean with another is a **hardware
+fault on that board**, not a cable, DHCP or switch problem - and the watchdog
+cannot cure it (its success check can pass while the port is useless to the
+application). Board #2 must always be clean on the same port; use it as the
+reference when a unit is suspected.
+
 It is a workaround - remove the script, the two units and the preset line once
 the driver-level fix lands (PLAN 8.5). The tunables are the constants at the top
 of the script (overridable from the environment for a one-off run).
@@ -371,11 +384,15 @@ NAND variants). The **rescue card** is assembled from both builds:
     #  result = <nand_output>/images/sdcard-rescue.img
     #  needs  mtools on the host (sudo apt install mtools)
 
-Field flow (verified on hardware 2026-10-28):
+Field flow (verified on hardware 2026-10-28; commands corrected 2026-11-04):
 
     make-rescue-sd.sh                  # -> <nand_output>/images/sdcard-rescue.img
-    # Etcher that image on an SD card, insert, power on
-    /root/flash-nand.sh                # on the board (auto-mounts its own /boot)
+    # copy the image to a LOCAL disk first, then Etcher it on an SD card,
+    # insert, power on  (Etcher hangs forever on an image that lives on a mapped
+    # network drive - its elevated helper has no drive mappings; LOG 14.1)
+    mount -t vfat /dev/mmcblk0p1 /boot  # the card's FAT is NOT mounted at boot
+    /boot/flash-nand.sh                 # or: flash-nand  (fs-overlay wrapper,
+                                        # mounts /boot then execs the above)
     #   bootstrap -> u-boot -> env x2 -> dtb -> kernel (nandwrite -p, ECC on the fly)
     #   then rootfs: flash_erase -> ubiformat -y -> ubiattach -m6 ->
     #                ubimkvol -N rootfs -S 1238 (~300 MiB) -> ubiupdatevol
@@ -391,6 +408,17 @@ The SD card is only a programming/rescue medium. Notes from the bring-up:
 * factory bad blocks near the end of the die make the whole-chip erase report
   EIO; `flash_erase` then erases per block and skips them — expected;
 * `/dev/mtd0` etc. are **char** devices.
+* `/boot` is **empty on a freshly booted rescue card**: U-Boot reads `zImage` and
+  the DTB from the FAT partition directly, so nothing mounts it (`/etc/fstab` has
+  only `/dev/root`). Mount `mmcblk0p1` by hand, or use the `flash-nand` wrapper
+  from `fs-overlay`, which mounts it and then execs `/boot/flash-nand.sh`.
+  The script cannot mount its own `/boot`: `ensure_boot()` runs from the very
+  partition it would have to mount. The script is `flash-nand.sh` (hyphen).
+* the rescue rootfs **is** the NAND build's rootfs, so `medicam-data.service`
+  attaches `mtd6` and `data.mount` mounts the NAND `/data` at boot. Until that is
+  fixed (mask both units in the rescue image, LOG 14.7), `flash-nand.sh` stops
+  them before the UBI step; if the UBI step still fails with "please, first
+  detach mtd6", reboot the card and flash only the rootfs (LOG 14.4).
 
 Measured on the board: `/` = `ubi0:rootfs` 1238 LEBs (299.8 MiB, 28 MiB used),
 `/data` = `ubi0:data` 2732 LEBs (661.6 MiB); PEB 256 KiB, LEB 253952, min-I/O

@@ -50,5 +50,7 @@ MD5SUMS                              text eol=lf
 # as text (a CRLF sshd_config breaks sshd, a CRLF motd prints ^M).
 motd                                 text eol=lf
 sshd_config                          text eol=lf
+# Field wrapper that breaks the /boot chicken-and-egg on the rescue card.
+flash-nand                           text eol=lf executable
 
 *.py                                 text eol=lf

@@ -950,3 +950,207 @@ Conventions
         Note: the previously committed MD5SUMS was stale for
         output-nand/images/{u-boot.bin,boot.bin.pmecc} - those files had not
         changed since 2026-10-29 23:19, the manifest had older values.
+
+--------------------------------------------------------------------------------
+13.7 [x] 2026-11-04 F31: THE DEFECT IS PER-UNIT HARDWARE; THE LINK PARTNER IS
+        INNOCENT (corrects the 2026-10-30 reading in 13.3-13.5)
+--------------------------------------------------------------------------------
+        Boards in this session:
+          #3  MAC 2A:45:D5:48:DB:74  - the unit that fails in the field
+          #2  MAC 5e:0d:4f:e1:1a:83  - second unit, flashed to NAND in 14.6
+        Network under test: Huawei AX3 (DHCP, .1) - Mikrotik hEX as an L2 bridge -
+        board on hEX ether3 (or ether4). Autonegotiated 100BASE-TX throughout;
+        the Medicam port was NEVER taken off autoneg. 30 cm cable.
+
+13.7.1 [x] DIRECTION: RECEIVE-ONLY, ON THE BOARD. hEX per-port counters showed
+        rx-fcs-error=0 and rx-align-error=0 while the board's own rx counters
+        kept growing (242 -> 456 packets): every frame #3 transmits reaches the
+        switch intact. The switch can only count errors on frames it receives,
+        so the loss/corruption happens inside the board's RX path.
+
+13.7.2 [x] PARTNER MATRIX, BOARD #3 (everything else held constant: same cable,
+        100F on both sides, same PHY registers):
+          hAP, desk, 192.168.88.252    crc 0 over 2 min, DHCP ok
+          TP-Link bridge               rx_crc_errors frozen, DHCP < 1 s, 0 % ping
+                                       loss, 4 MB scp md5 match, clean over 2 min
+          hEX ether3                   ~50 % of frames corrupt
+          hEX ether4                   66 % corrupt (481 CRC vs 246 good),
+                                       10/10 pings lost, no DHCP possible
+
+13.7.3 [x] PHY AND MAC STATE IN THE FAILING STATE (MDIO over MAN 0x34 with
+        busybox devmem, MAC at 0xf802c000):
+          BMCR=0x3100 BMSR=0x786D ANAR=0x89E1 ANLPAR=0xC1E1 ANER=0x000F
+          CTRL1=0x0116 CTRL2=0x8100
+        -> link up, 100F, MDI, auto-MDIX on, EDPD off, no parallel-detect fault:
+        identical to the healthy baseline. Silicon is A3 (reg 3h[3:0]=1) -> the
+        RMII-TX errata (A/A2) does not apply; the EEE module is KSZ8091-only.
+        MACB: NCR=0x1C, RBQP on the live ring position, RSR=0x02, ISR=0, TSR=0x21
+        -> MAC, ring and descriptors healthy. The PHY insists the link is fine
+        while 66 % of the received frames are corrupt.
+
+13.7.4 [x] LinkMD CANNOT BE USED AGAINST A LIVE PARTNER: `result=3`, "unable to
+        shut down the link partner". It must be run with the far end unplugged.
+        The earlier inconclusive LinkMD readings were caused by this, not by the
+        cable.
+
+13.7.5 [x] CONTROLS - all on the SAME failing port (hEX ether3), same cable, each
+        a 100BASE-TX receiver:
+          Realtek USB FE NIC (100M-only PHY)  4000/4000, 0 loss, 0 rx errors
+                                              (1G baseline: 1000/1000)
+          Maxicam board - i.MX FEC, KSZ8081RNBIA, phy_id=0x00221560, RMII, its
+          own buildroot/BSP                   DHCP .24 via hEX, 500/500 pings,
+                                              rx_crc_errors=0
+          Medicam #2, same build, NAND boot    DHCP .26 via hEX, 3500/3500 pings,
+                                              rx_crc_errors=0, ~5 MB received
+        Three independent receivers decode the hEX's 100BASE-TX transmitter
+        perfectly. The hEX, its power supply, the cable, autoneg and the PHY
+        configuration are exonerated.
+
+13.7.6 [x] A/B ON THE SAME BOARD DESIGN: #3 corrupts, #2 is clean on the same
+        port with the same image -> the defect is per-unit hardware, NOT a
+        KSZ8081-family or MAC/RMII design limitation.
+
+13.7.7 [!] RETRACTED: "the hEX is the culprit" (13.3-13.5, 2026-10-30). It rested
+        on partner-dependence alone, before a control receiver and a second
+        MediCam unit existed. Both now exist and both are clean.
+
+13.7.8 [!] NOT TESTED - DO NOT CITE: 10 Mbps on a Medicam board. The 10M device
+        reported on hEX ether5 is a third-party device and says nothing about the
+        KSZ8081. The Medicam port was never forced off autoneg: 10M is not an
+        acceptable operating point for the product (it needs 100M), so the test
+        was skipped deliberately.
+
+13.7.9 [x] REMAINING HYPOTHESES, in order: (1) PHY RX analogue front end -
+        adaptive equaliser, DC restoration, slicer threshold; (2) RX-pair
+        magnetics and termination on the PCB; (3) RBIAS (6.49 kOhm 1 %)
+        tolerance; (4) RMII RX timing / 50 MHz REFCLKO from the PHY to the
+        SAM9X60. (4) fits "only some partners fail" best: at 100BASE-TX the RX
+        clock is recovered from the partner's signal, so a marginal RMII sampling
+        window moves with the partner's jitter.
+
+13.7.10 [x] CONSEQUENCE FOR THE WORKAROUND (8.5): on an affected unit the
+        degraded state is partner-dependent and permanent. The watchdog can
+        neither prevent nor cure it, and its own success check (RX moving, CRC
+        flat) can pass in a state that is unusable for the application - this is
+        what 13.5 observed as "the watchdog did nothing". F31's "stuck" and this
+        "corrupt" state are two severities of one marginal RX chain.
+
+13.7.11 [ ] NEXT (hardware): scope REFCLKO (50 MHz, amplitude/jitter) and RMII
+        RXDV/RXD setup/hold against the recovered RX_CLK; measure the RX-pair
+        termination and RBIAS; or swap the KSZ8081 on #3. The Microchip FAE
+        question is sharpened in PLAN F31.
+
+--------------------------------------------------------------------------------
+14. RESCUE CARD AND NAND PROVISIONING - 2026-11-04
+--------------------------------------------------------------------------------
+14.1 [x] sdcard-rescue.img COULD NOT BE WRITTEN by balenaEtcher: it hung on
+        "Starting..." for >10 min with two different cards and two different
+        USB-SD readers, and a PC reboot changed nothing. The card, readers and
+        image are fine - the cause is the host path: the image lives on a
+        credential-backed SMB map (S: -> \\<host>\Sync, mapped with a non-default
+        user), so
+          * the UNC path behind the mapping is not reachable directly
+            (Test-Path '\\<host>\Sync\...' -> False even unelevated), and
+          * an elevated process (Etcher's helper, or any "Run as administrator"
+            PowerShell) has no drive mappings at all.
+        Copying the image to a local disk first made Etcher write it in one pass.
+        Rule for next time: stage the image on a local disk before any flashing
+        tool - this is a host workflow issue, not an image issue.
+
+14.2 [!] "/boot is empty, there is no /boot/flash_nand.sh" on a freshly booted
+        rescue card. Two causes:
+          * the script is named flash-nand.sh (hyphen), and
+          * the card's FAT partition (mmcblk0p1) is never mounted: /etc/fstab has
+            only "/dev/root / auto rw 0 1", and U-Boot reads zImage and the DTB
+            from that FAT directly, so the kernel has no reason to mount it.
+            /boot is an empty directory in the rootfs.
+        Workaround used on the board: mount -t vfat /dev/mmcblk0p1 /boot
+        (255.7 MiB, 38.5 MiB used: flash-nand.sh, rootfs.ubifs, boot.bin.pmecc,
+        u-boot-nand.bin, uboot-env.bin, zImage, at91-sam9x60_medicam.dtb).
+        The script cannot fix this itself: its ensure_boot() runs from the very
+        partition it would have to mount.
+
+14.3 [x] FIX IN THE TREE (not yet built into a card): new overlay wrapper
+        fs-overlay/usr/local/sbin/flash-nand - mounts mmcblk0p1 (then mmcblk1p1)
+        on /boot, falls back to a /proc/mounts test when `mountpoint` is absent,
+        then execs /boot/flash-nand.sh "$@" so every sub-command
+        (all|bootstrap|uboot|env|dtb|kernel|rootfs) passes through, and fails with
+        a clear message when no rescue card is mounted. Logic verified on the
+        board: /boot was unmounted, the wrapper's probe mounted mmcblk0p1 and
+        /boot/flash-nand.sh became visible.
+        .gitattributes: this script has no extension, so it needs an explicit
+        "text eol=lf" rule - with core.autocrlf=true a Windows checkout would
+        otherwise give it CRLF and the shebang fails with "bad interpreter".
+
+14.4 [!] flash-nand.sh FAILED AT THE UBI STEP, after erasing mtd6:
+          ubiformat: error!: please, first detach mtd6 (/dev/mtd6) from ubi0
+        Cause chain: on the rescue card the rootfs IS the NAND build's rootfs, so
+        at boot medicam-data.service attaches mtd6 as ubi0 and data.mount mounts
+        the "data" UBIFS volume on /data. write_ubi() did try to detach, but
+          (i) it ran `ubidetach ... 2>/dev/null` and treated ANY failure as
+              "no UBI attached (fine)" - the volume was still held open by the
+              UBIFS background thread (ubifs_bgt0_0), so ubidetach returned
+              EBUSY (error 16) and nothing reported it;
+          (ii) it then ran flash_erase on the still-attached mtd6, destroying the
+              mounted filesystem's metadata under UBI, and only ubiformat refused.
+        State afterwards: mtd6 erased, ubi0 attached in RAM to erased media, not
+        detachable from userspace (the stuck kernel thread only dies on reboot).
+        Recovery: reboot the rescue card - nothing re-attaches (medicam-data.sh
+        only attaches and creates volumes, it never formats, so ubiattach fails on
+        the erased region) - then `/boot/flash-nand.sh rootfs`. mtd0..mtd5 had
+        already been written correctly, so only the rootfs was left. Bad blocks
+        skipped by the erase (0x3f580000, 0x3f5c0000) are expected: 4 bad PEBs on
+        this die.
+
+14.5 [x] FIX IN THE TREE (NOT YET TESTED end to end - needs the next rescue-card
+        run): flash-nand.sh gained ubi_dev_of_mtd() and detach_ubi(), and
+        write_ubi() now
+          * stops data.mount and medicam-data.service before touching the volume
+            (via systemctl, when present),
+          * umounts every UBIFS mount, then retries ubidetach up to 5 times,
+          * decides "attached" from /sys/class/ubi/ubi*/mtd_num instead of the
+            ubidetach return code,
+          * DIES with an actionable message when the mtd is still attached instead
+            of logging "fine", so no erase can run on a live mtd,
+          * erases only after a verified detach,
+          * refuses to run at all when / is a ubi device (i.e. booted from NAND),
+            because this code path would detach the running rootfs.
+        That last guard was verified on hardware: on a NAND boot the check returns
+        ubi0:rootfs.
+
+14.6 [x] NAND BOOT OF #2 VERIFIED after the flash (the unit that is clean on the
+        hEX, 13.7.5): cmdline ubi.mtd=6 root=ubi0:rootfs rootfstype=ubifs rw;
+        mtd0..mtd6 exactly as designed (bootstrap 256K, u-boot 768K, env x2 256K,
+        dtb 512K, kernel 8M, ubi 1014M). ubi0: rootfs 1238 LEB (299.8 MiB) + data
+        2732 LEB (661.6 MiB), 0 LEB free, 4 bad PEBs. / on ubi0:rootfs (278M, 10 %
+        used), /data on ubi0:data (617M). No failed systemd units;
+        medicam-netwatch.timer, medicam-data.service and data.mount active; the
+        netwatch ran and finished clean. eth0 100F, rx_crc_errors=0, rx_errors=0,
+        tx_errors=0; gateway and internet ping 0 % loss. EEPROM record valid:
+        "MCM1 1 mac=5e0d4fe11a83 serial=0000000000000000", hostname
+        medicam-e11a83 = MAC tail. dmesg has no errors in the ethernet path.
+
+14.7 [ ] OPEN (deferred by decision, not forgotten): the rescue design mounts the
+        NAND /data at boot - on a card whose whole purpose is to reformat that
+        region. Fix later; options: mask medicam-data.service and data.mount in
+        the rescue image, make medicam-data.sh skip when booted from SD, or keep
+        flash-nand.sh stopping them (done in 14.5 as a workaround). The proper
+        /boot automount story also still has to be decided (14.3 gives a wrapper,
+        not a mount unit).
+
+14.8 [x] FIELD NOTE (Huawei AX3 UI): a client shows up in the router's device list
+        only after it has sent traffic to the router (the list is neighbour-driven,
+        not lease-driven); until then the lease exists but the device is invisible.
+        Without a DHCP hostname the entry is named after the MAC (e.g.
+        "8E-8D-F1-CD-50-03"). Board #3 never appeared at all - because it never got
+        a lease: its RX could not take the OFFER through the hEX.
+
+14.9 [ ] OPEN (other BSP - Maxicam board, recorded here because it served as a
+        control in 13.7.5): its rootfs ships no eth0 stanza in
+        /etc/network/interfaces, so DHCP is not automatic (it needs
+        `ip link set eth0 up; udhcpc -i eth0` after every boot); the kernel gives
+        eth0 a random MAC on every boot ("invalid hw address, using random") and
+        udhcpc sends no hostname, so the router sees a new device each boot, named
+        after its MAC. Worked around on that card with "auto eth0" / "iface eth0
+        inet dhcp"; pinning the MAC and sending a DHCP hostname are still to do in
+        that repository.

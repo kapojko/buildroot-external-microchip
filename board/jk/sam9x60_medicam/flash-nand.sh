@@ -118,23 +118,68 @@ write_raw() {
     nandwrite -p "$dev" "$BOOT/$file"
 }
 
+# Which ubi device (number) is currently attached to mtd $1? Empty if none.
+ubi_dev_of_mtd() {
+    for d in /sys/class/ubi/ubi[0-9]*; do
+        [ -r "$d/mtd_num" ] || continue
+        [ "$(cat "$d/mtd_num")" = "$1" ] || continue
+        echo "${d##*/ubi}"
+        return 0
+    done
+    return 1
+}
+
+# Detach mtd $1 from UBI, or die trying. On the rescue SD the rootfs IS the
+# NAND build's rootfs, so medicam-data.service attaches this mtd at every boot
+# and data.mount mounts the UBIFS volume on /data. That leaves the volume open
+# and ubidetach fails with EBUSY, so the units must be stopped first.
+detach_ubi() {
+    mtdn=$1
+
+    # Never detach the UBI device that carries the running root filesystem:
+    # on a NAND boot that is ubi0:rootfs, and this script must be run from the
+    # rescue SD (root=/dev/mmcblk0p2).
+    rootsrc=$(awk '$1 ~ /^ubi[0-9]+:/ && $2 == "/" {print $1; exit}' /proc/self/mounts)
+    [ -z "$rootsrc" ] || die "the running root filesystem is $rootsrc - this board booted from NAND.
+       Boot the rescue SD card and run the script from there."
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop data.mount 2>/dev/null || true
+        systemctl stop medicam-data.service 2>/dev/null || true
+    fi
+
+    awk '$3 == "ubifs" && $1 ~ /^ubi[0-9]+:/ {print $2}' /proc/self/mounts | \
+        while read -r mp; do umount "$mp" 2>/dev/null && log "unmounted $mp"; done
+
+    n=0
+    while ubi_dev_of_mtd "$mtdn" >/dev/null 2>&1; do
+        n=$((n + 1))
+        [ "$n" -le 5 ] || break
+        log "detaching UBI from /dev/mtd$mtdn (attempt $n)..."
+        ubidetach -m "$mtdn" 2>&1 | sed 's/^/  /' || true
+        sleep 1
+    done
+
+    if ubidev=$(ubi_dev_of_mtd "$mtdn"); then
+        # Mandatory: ubiformat would refuse anyway, and flash_erase on an mtd
+        # that UBI still owns destroys the mounted filesystem's metadata.
+        die "cannot detach /dev/mtd$mtdn from ubi$ubidev (still busy).
+       Something still holds the UBI volume open. Easiest cure: reboot the
+       rescue SD card and re-run this script - a UBIFS thread left behind by an
+       erase cannot be cleared from userspace."
+    fi
+    log "no UBI attached to /dev/mtd$mtdn (or detached)"
+}
+
 write_ubi() {
     # $1 = device, $2 = file on $BOOT, $3 = eraseblock count, $4 = volume name
     dev=$1; file=$2; cnt=$3; volname=$4
     mtdn=${dev#/dev/mtd}
     [ -f "$BOOT/$file" ] || die "missing $BOOT/$file"
 
-    # The board may have UBI attached to this mtd (the /data volume lives on
-    # the same UBI region when booted from SD). ubiformat refuses to work on an
-    # attached mtd, so unmount every UBIFS volume and detach first.
+    # ubiformat and flash_erase both need the mtd to be free of UBI.
     log "Detaching UBI from $dev ..."
-    awk '$3 == "ubifs" && $1 ~ /^ubi[0-9]+:/ {print $2}' /proc/self/mounts | \
-        while read -r mp; do umount "$mp" 2>/dev/null && log "unmounted $mp"; done
-    if ubidetach -m "$mtdn" 2>/dev/null; then
-        log "detached ubi from $dev"
-    else
-        log "no UBI attached to $dev (fine)"
-    fi
+    detach_ubi "$mtdn"
 
     log "Erasing $dev ($cnt x ${EB_KB} KiB)..."
     flash_erase "$dev" 0 "$cnt"

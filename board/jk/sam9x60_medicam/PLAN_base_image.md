@@ -639,6 +639,61 @@ synthetic stuck state, only `ip link down/up` did; `rx_dropped` climbs ~0.45/s
 on a healthy link through the `netdev_alloc_skb()` NULL path in
 `macb_rx_frame()` (separate anomaly, not CRC/PHY).
 
+Status 2026-11-04 (details in LOG 13.7): **the root cause is per-unit hardware
+and the link partner is innocent.** Tested on the field network (Huawei AX3
+DHCP -> Mikrotik hEX as an L2 bridge -> board, autonegotiated 100BASE-TX, 30 cm
+cable) with two MediCam units:
+* board #3 (`2A:45:D5:48:DB:74`): ~50 % of frames corrupt on hEX `ether3`, 66 %
+  on `ether4` (481 CRC vs 246 good, 10/10 pings lost, no DHCP possible); clean
+  on the hAP (crc 0 over 2 min) and on a TP-Link bridge (CRC frozen, DHCP < 1 s,
+  4 MB scp md5 ok);
+* board #2 (`5e:0d:4f:e1:1a:83`), same build, NAND boot: DHCP `.26` and
+  3500/3500 pings with `rx_crc_errors=0` on the **same** hEX `ether3`.
+Three independent control receivers on that port are clean as well - a Realtek
+FE NIC (4000/4000), the Maxicam board (i.MX FEC + KSZ8081RNBIA,
+`phy_id 0x00221560`, 500/500, crc 0) and board #2. Direction is proven one-way:
+the switch counts zero FCS/align errors on the frames #3 sends. In the failing
+state the PHY registers are identical to the healthy baseline (`BMCR=0x3100`,
+`BMSR=0x786D`, `ANAR=0x89E1`, `ANLPAR=0xC1E1`, `ANER=0x000F`, `CTRL1=0x0116`,
+`CTRL2=0x8100`; silicon A3; no parallel-detect fault) and the MACB ring is
+healthy. Consequences:
+* the 2026-10-30 reading ("the hEX is the culprit") is **retracted**;
+* `LinkMD` is only meaningful with the far end **unplugged** (`result=3` =
+  "unable to shut down the link partner"), which is why the earlier cable tests
+  were inconclusive;
+* the "stuck" state of 13.1 and this "corrupt" state are two severities of one
+  marginal receive chain. On an affected unit the corruption is partner-dependent
+  and permanent, so the watchdog of 8.5 can neither prevent nor cure it - its own
+  success check ("RX moving, CRC flat") can even pass in a state that is useless
+  to the application, which is what 13.5 observed as "the watchdog did nothing".
+* 10 Mbps was **not** tested on a Medicam board (the 10M device seen on hEX
+  `ether5` is a third-party device; 10M is not an acceptable operating point for
+  this product). Do not cite it as evidence about F31.
+
+Suspects left, in order: the PHY RX analogue front end (adaptive equaliser, DC
+restoration, slicer threshold), the RX-pair magnetics/termination on the PCB,
+`RBIAS` (6.49 kOhm 1 %) tolerance, and RMII RX timing / 50 MHz `REFCLKO` from the
+PHY to the SAM9X60 - the last fits partner-dependence best, because at
+100BASE-TX the RX clock is recovered from the partner's signal. Next: scope
+`REFCLKO` and RMII `RXDV/RXD` setup/hold against the recovered `RX_CLK`, measure
+the RX-pair termination and `RBIAS`, or swap the KSZ8081 on #3.
+
+Microchip FAE question, sharpened by the A/B evidence:
+
+  "KSZ8081RNB, silicon rev A3, on an SAM9X60 `macb` over RMII. One unit corrupts
+  50-100 % of the frames received from one specific 100BASE-TX link partner (a
+  Mikrotik hEX switch port, on two different ports of that switch), while three
+  other partners (a Wi-Fi-router bridge, a TP-Link bridge, a bench link) are
+  clean on the same unit, same cable, same PHY configuration. That partner's
+  transmitter is verified good against three other receivers: a Realtek FE PHY,
+  an i.MX design using the same KSZ8081 family, and a second unit of the same
+  board. MDIO state is healthy and identical in the failing and the healthy
+  cases; the TX direction is clean (the partner counts zero FCS errors); the
+  RMII-TX errata (A/A2) and the KSZ8091-only EEE module do not apply. Which
+  internal state or external component can make a single unit's RX marginal in
+  a *partner-dependent* way - adaptive equaliser, DC restoration, RBIAS
+  tolerance, or RMII RX timing against the recovered clock?"
+
 ---
 
 ## 5. Decisions (locked)
